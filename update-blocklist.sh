@@ -146,17 +146,35 @@ detect_firewall() {
   echo "aucun"
 }
 
+# --- Détection de Docker (chaîne DOCKER-USER) ---
+detect_docker() {
+  iptables -L DOCKER-USER -n >/dev/null 2>&1
+}
+
+# --- Insertion idempotente des règles LOG + DROP sur une chaîne iptables ---
+_apply_iptables_rules() {
+  local chain="$1"
+  iptables -C "$chain" -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null || {
+    iptables -I "$chain" -m set --match-set "$SET_NAME" src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+    iptables -I "$chain" 2 -m set --match-set "$SET_NAME" src -j DROP
+    return 0
+  }
+  return 1
+}
+
 # --- Application des règles firewall ---
 apply_firewall_rules() {
   local fw="$1"
 
+  local docker_protected=0
+
   case "$fw" in
     iptables)
-      iptables -C INPUT -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null || {
-        iptables -I INPUT -m set --match-set "$SET_NAME" src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
-        iptables -I INPUT 2 -m set --match-set "$SET_NAME" src -j DROP
-        log "Règles iptables ajoutées (LOG + DROP)."
-      }
+      _apply_iptables_rules INPUT && log "Règles iptables ajoutées (LOG + DROP)."
+      if detect_docker; then
+        _apply_iptables_rules DOCKER-USER && log "Règles iptables DOCKER-USER ajoutées (LOG + DROP)."
+        docker_protected=1
+      fi
       ;;
 
     nftables)
@@ -164,20 +182,31 @@ apply_firewall_rules() {
       # On utilise iptables (iptables-nft) qui traduit les commandes en règles nft
       # tout en supportant le match ipset via le module xt_set du noyau.
       need_cmd iptables
-      iptables -C INPUT -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null || {
-        iptables -I INPUT -m set --match-set "$SET_NAME" src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
-        iptables -I INPUT 2 -m set --match-set "$SET_NAME" src -j DROP
-        log "Règles nftables ajoutées via iptables-nft (LOG + DROP)."
-      }
+      _apply_iptables_rules INPUT && log "Règles nftables ajoutées via iptables-nft (LOG + DROP)."
+      if detect_docker; then
+        _apply_iptables_rules DOCKER-USER && log "Règles nftables DOCKER-USER ajoutées via iptables-nft (LOG + DROP)."
+        docker_protected=1
+      fi
       ;;
 
     firewalld)
+      local need_reload=0
       if ! firewall-cmd --permanent --direct --query-rule ipv4 filter INPUT 1 -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
         firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 -m set --match-set "$SET_NAME" src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
         firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -m set --match-set "$SET_NAME" src -j DROP
-        firewall-cmd --reload
+        need_reload=1
         log "Règles firewalld ajoutées (LOG + DROP)."
       fi
+      if detect_docker; then
+        if ! firewall-cmd --permanent --direct --query-rule ipv4 filter DOCKER-USER 1 -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
+          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 0 -m set --match-set "$SET_NAME" src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 1 -m set --match-set "$SET_NAME" src -j DROP
+          need_reload=1
+          log "Règles firewalld DOCKER-USER ajoutées (LOG + DROP)."
+        fi
+        docker_protected=1
+      fi
+      [ "$need_reload" -eq 1 ] && firewall-cmd --reload
       ;;
 
     ufw)
@@ -190,8 +219,17 @@ apply_firewall_rules() {
         ufw reload
         log "Règles ufw ajoutées (LOG + DROP)."
       fi
+      # Docker utilise iptables directement, hors du périmètre ufw
+      if detect_docker; then
+        _apply_iptables_rules DOCKER-USER && log "Règles DOCKER-USER ajoutées (LOG + DROP)."
+        docker_protected=1
+      fi
       ;;
   esac
+
+  if [ "$docker_protected" -eq 1 ]; then
+    log "Docker détecté : la chaîne DOCKER-USER est protégée."
+  fi
 }
 
 # --- Vérification dépendances ---
@@ -340,6 +378,9 @@ if [ "$DRY_RUN" -eq 1 ]; then
   # Afficher le firewall détecté même en dry-run
   DETECTED_FW="$(detect_firewall)"
   log "[DRY-RUN] Firewall détecté : $DETECTED_FW"
+  if detect_docker; then
+    log "[DRY-RUN] Docker détecté : les règles seraient aussi appliquées sur DOCKER-USER."
+  fi
   exit 0
 fi
 
@@ -400,7 +441,11 @@ log "Total d'IP bloquées : $(fmt_num "$total")"
 # --- Vérification / application des règles firewall ---
 DETECTED_FW="$(detect_firewall)"
 if [ "$DETECTED_FW" != "aucun" ]; then
-  log "Firewall détecté : $DETECTED_FW"
+  if detect_docker; then
+    log "Firewall détecté : $DETECTED_FW (Docker présent, chaîne DOCKER-USER trouvée)"
+  else
+    log "Firewall détecté : $DETECTED_FW"
+  fi
   apply_firewall_rules "$DETECTED_FW"
 else
   err "Aucun firewall détecté. Les IP sont dans le set ipset mais aucune règle de blocage n'est active."

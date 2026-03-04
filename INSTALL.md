@@ -152,6 +152,26 @@ Le script :
 
 `update-blocklist.sh` fonctionne seul (sans setup-firewall.sh) car il auto-détecte le firewall en place.
 
+### Support Docker
+
+Sur un hôte Docker, le trafic destiné aux conteneurs (ports publiés via `-p` / `ports:`) passe par la chaîne `FORWARD`, pas `INPUT`. Sans protection supplémentaire, les IP bloquées atteignent quand même les conteneurs.
+
+Le script détecte automatiquement la présence de Docker via la chaîne `DOCKER-USER` dans iptables. Quand elle existe, les mêmes règles LOG + DROP sont appliquées sur `DOCKER-USER` en plus de `INPUT`, protégeant ainsi les conteneurs exposés (ex : Traefik, Nginx, etc.).
+
+**Notes :**
+
+- Docker recrée `DOCKER-USER` à chaque restart du daemon — les règles ne persistent pas. Le cron + `@reboot` les réapplique automatiquement, et l'idempotence évite les doublons.
+- Si le script s'exécute au boot avant Docker, `DOCKER-USER` n'existe pas encore — la détection est correctement négative. Le prochain cron rattrapera.
+- Aucune configuration nécessaire : la détection et l'application sont entièrement automatiques.
+
+Vérification après exécution :
+
+```bash
+iptables -L DOCKER-USER -n
+```
+
+Les règles LOG + DROP avec `match-set blacklist src` doivent apparaître.
+
 ### Firewalls supportés
 
 | Firewall | Description |
@@ -209,6 +229,17 @@ Ajouter dans `/etc/ufw/before.rules` (section `*filter`, avant `COMMIT`) :
 ```
 
 Puis `ufw reload`.
+
+#### Docker (DOCKER-USER)
+
+Sur un hôte Docker, ajouter les mêmes règles sur la chaîne `DOCKER-USER` pour protéger les conteneurs :
+
+```bash
+iptables -I DOCKER-USER -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+iptables -I DOCKER-USER 2 -m set --match-set blacklist src -j DROP
+```
+
+> `update-blocklist.sh` fait cela automatiquement quand Docker est détecté. La configuration manuelle n'est nécessaire que si vous n'utilisez pas le script.
 
 ## Logs des IP bloquées
 

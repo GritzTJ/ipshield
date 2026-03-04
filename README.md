@@ -27,6 +27,7 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 - Mise à jour **atomique** via `ipset restore` + `swap` (zéro downtime)
 - **Détection automatique** du firewall actif
 - Application **idempotente** des règles LOG + DROP
+- **Support Docker** : protection automatique de la chaîne `DOCKER-USER` (conteneurs exposés)
 - **Seuil minimum** d'entrées (protection anti-purge)
 - Calcul **dynamique** de hashsize/maxelem
 - **Rapport de diff** : entrées ajoutées, retirées, inchangées
@@ -131,6 +132,7 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 - **Atomic** updates via `ipset restore` + `swap` (zero downtime)
 - **Automatic detection** of the active firewall
 - **Idempotent** LOG + DROP rule application
+- **Docker support**: automatic `DOCKER-USER` chain protection (exposed containers)
 - **Minimum threshold** of entries (anti-purge protection)
 - **Dynamic** hashsize/maxelem calculation
 - **Diff report**: added, removed, unchanged entries

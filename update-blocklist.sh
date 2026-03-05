@@ -368,9 +368,9 @@ if [ "$DRY_RUN" -eq 1 ]; then
   log "[DRY-RUN] $(fmt_num "$entries_count") entrées seraient appliquées."
   # En dry-run, afficher aussi le rapport de diff si le set existe
   if ipset list -n 2>/dev/null | awk -v s="$SET_NAME" '$0==s{found=1} END{exit(found?0:1)}'; then
-    set_info="$(ipset list "$SET_NAME" 2>/dev/null)"
-    echo "$set_info" | awk '/^Members:/{p=1;next} p{print}' \
-      | awk '{x=$1; if (x!="" && index(x,"/")==0) x=x"/32"; if (x!="") print x}' \
+    # Pipe direct vers fichier (évite de stocker 1M+ entrées dans une variable)
+    ipset list "$SET_NAME" 2>/dev/null \
+      | awk '/^Members:/{p=1;next} p{x=$1; if (x!="" && index(x,"/")==0) x=x"/32"; if (x!="") print x}' \
       | sort -u > "${TMP_DIR}/old_members"
     added="$(comm -13 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
     removed="$(comm -23 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
@@ -386,13 +386,13 @@ if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
 
-# --- Vérification set existant (un seul appel ipset list) ---
+# --- Vérification set existant (ipset list -t = headers seulement, pas de dump des membres) ---
 SET_EXISTS=0
 if ipset list -n 2>/dev/null | awk -v s="$SET_NAME" '$0==s{found=1} END{exit(found?0:1)}'; then
   SET_EXISTS=1
-  set_info="$(ipset list "$SET_NAME" 2>/dev/null)"
-  existing_type="$(echo "$set_info" | awk -F': ' '/^Type: /{print $2; exit}')"
-  existing_family="$(echo "$set_info" | awk -F': ' '/^Header: /{h=$2} END{if (h ~ /family inet6/) print "inet6"; else if (h ~ /family inet/) print "inet"; else print ""}')"
+  set_header="$(ipset list -t "$SET_NAME" 2>/dev/null)"
+  existing_type="$(echo "$set_header" | awk -F': ' '/^Type: /{print $2; exit}')"
+  existing_family="$(echo "$set_header" | awk -F': ' '/^Header: /{h=$2} END{if (h ~ /family inet6/) print "inet6"; else if (h ~ /family inet/) print "inet"; else print ""}')"
   if [ "$existing_type" != "$IPSET_TYPE" ] || [ "$existing_family" != "$IPSET_FAMILY" ]; then
     err "Erreur : set '$SET_NAME' existe mais type/family incompatibles (type=$existing_type family=$existing_family). Attendu: type=$IPSET_TYPE family=$IPSET_FAMILY. Annulation."
     exit 1
@@ -410,13 +410,13 @@ if [ "$(wc -l < "$TMP_FILE")" -le 1 ]; then
   exit 1
 fi
 
-# --- Rapport de diff (verbose uniquement, réutilise set_info) ---
+# --- Rapport de diff (verbose uniquement, pipe direct vers fichier) ---
 if [ "$VERBOSE" -eq 1 ]; then
   if [ "$SET_EXISTS" -eq 1 ]; then
-    member_count="$(echo "$set_info" | awk -F': ' '/Number of entries/{print $2+0; exit}')"
+    member_count="$(echo "$set_header" | awk -F': ' '/Number of entries/{print $2+0; exit}')"
     if [ "$member_count" -gt 0 ]; then
-      echo "$set_info" | awk '/^Members:/{p=1;next} p{print}' \
-        | awk '{x=$1; if (x!="" && index(x,"/")==0) x=x"/32"; if (x!="") print x}' \
+      ipset list "$SET_NAME" 2>/dev/null \
+        | awk '/^Members:/{p=1;next} p{x=$1; if (x!="" && index(x,"/")==0) x=x"/32"; if (x!="") print x}' \
         | sort -u > "${TMP_DIR}/old_members"
       added="$(comm -13 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
       removed="$(comm -23 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"

@@ -150,9 +150,15 @@ rollback() {
   if [ "${ROLLBACK_ARMED:-0}" -eq 1 ]; then
     err "échec détecté — tentative de réactivation de $DETECTED..."
     case "$DETECTED" in
-      firewalld) systemctl start firewalld 2>/dev/null && log "firewalld réactivé." || err "impossible de réactiver firewalld." ;;
-      ufw)       ufw --force enable 2>/dev/null && log "ufw réactivé." || err "impossible de réactiver ufw." ;;
-      nftables)  systemctl start nftables 2>/dev/null && log "nftables réactivé." || err "impossible de réactiver nftables." ;;
+      firewalld)
+        if systemctl start firewalld 2>/dev/null; then log "firewalld réactivé."
+        else err "impossible de réactiver firewalld."; fi ;;
+      ufw)
+        if ufw --force enable 2>/dev/null; then log "ufw réactivé."
+        else err "impossible de réactiver ufw."; fi ;;
+      nftables)
+        if systemctl start nftables 2>/dev/null; then log "nftables réactivé."
+        else err "impossible de réactiver nftables."; fi ;;
     esac
   fi
 }

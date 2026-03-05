@@ -410,17 +410,21 @@ if [ "$(wc -l < "$TMP_FILE")" -le 1 ]; then
   exit 1
 fi
 
-# --- Rapport de diff (réutilise set_info) ---
-if [ "$SET_EXISTS" -eq 1 ]; then
-  member_count="$(echo "$set_info" | awk -F': ' '/Number of entries/{print $2+0; exit}')"
-  if [ "$member_count" -gt 0 ]; then
-    echo "$set_info" | awk '/^Members:/{p=1;next} p{print}' \
-      | awk '{x=$1; if (x!="" && index(x,"/")==0) x=x"/32"; if (x!="") print x}' \
-      | sort -u > "${TMP_DIR}/old_members"
-    added="$(comm -13 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
-    removed="$(comm -23 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
-    unchanged="$(comm -12 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
-    log "Diff: +$(fmt_num "$added") ajoutées, -$(fmt_num "$removed") retirées, =$(fmt_num "$unchanged") inchangées"
+# --- Rapport de diff (verbose uniquement, réutilise set_info) ---
+if [ "$VERBOSE" -eq 1 ]; then
+  if [ "$SET_EXISTS" -eq 1 ]; then
+    member_count="$(echo "$set_info" | awk -F': ' '/Number of entries/{print $2+0; exit}')"
+    if [ "$member_count" -gt 0 ]; then
+      echo "$set_info" | awk '/^Members:/{p=1;next} p{print}' \
+        | awk '{x=$1; if (x!="" && index(x,"/")==0) x=x"/32"; if (x!="") print x}' \
+        | sort -u > "${TMP_DIR}/old_members"
+      added="$(comm -13 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
+      removed="$(comm -23 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
+      unchanged="$(comm -12 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
+      log "Diff: +$(fmt_num "$added") ajoutées, -$(fmt_num "$removed") retirées, =$(fmt_num "$unchanged") inchangées"
+    fi
+  else
+    log "Diff: +$(fmt_num "$entries_count") ajoutées (nouveau set)"
   fi
 fi
 

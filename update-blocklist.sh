@@ -94,7 +94,7 @@ TMP_DIR="$(mktemp -d -p /run "${SET_NAME}.XXXXXX")"
 UNIQ_FILE="${TMP_DIR}/uniq"
 TMP_FILE="${TMP_DIR}/restore"
 TEMP_SET="${SET_NAME}-tmp-$$"
-CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --retry 3 --retry-delay 2 --retry-all-errors )
+CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize 52428800 --retry 3 --retry-delay 2 --retry-all-errors )
 
 if [ "${#TEMP_SET}" -gt 31 ]; then
   echo "Erreur : nom de set temporaire trop long (${#TEMP_SET} > 31)" >&2
@@ -211,6 +211,8 @@ apply_firewall_rules() {
 
     ufw)
       if ! grep -q "match-set $SET_NAME src" /etc/ufw/before.rules 2>/dev/null; then
+        # Sauvegarde avant modification (protection contre corruption par sed)
+        cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
         sed -i "/*filter/,/COMMIT/ {
           /COMMIT/ i\\
 -A ufw-before-input -m set --match-set $SET_NAME src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix \"BLOCKED: \" --log-level 4\\

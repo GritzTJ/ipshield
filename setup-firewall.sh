@@ -115,8 +115,25 @@ echo ""
 log "Installation et activation de : $FIREWALL"
 
 # --- Demander si un port doit être ouvert (protection anti-lockout SSH) ---
+# Détection automatique du port SSH pour pré-remplir la valeur par défaut
+SSH_PORT_DETECTED=""
+if command -v ss >/dev/null 2>&1; then
+  SSH_PORT_DETECTED="$(ss -tlnp 2>/dev/null | awk '/sshd/{for(i=1;i<=NF;i++){if($i~/:/) {sub(/.*:/,"",$i); if($i+0>0) {print $i; exit}}}}')"
+fi
+
 echo ""
-read -rp "Port à ouvrir avant activation (ex: port SSH, vide pour passer) : " SAFE_PORT
+if [ -n "$SSH_PORT_DETECTED" ]; then
+  read -rp "Port à ouvrir avant activation (défaut: $SSH_PORT_DETECTED, 'non' pour passer) : " SAFE_PORT
+  # Entrée vide = accepter le port détecté
+  [ -z "$SAFE_PORT" ] && SAFE_PORT="$SSH_PORT_DETECTED"
+else
+  read -rp "Port à ouvrir avant activation (ex: port SSH, vide pour passer) : " SAFE_PORT
+fi
+
+# Gestion du refus explicite
+if [ "$SAFE_PORT" = "non" ] || [ "$SAFE_PORT" = "no" ] || [ "$SAFE_PORT" = "n" ]; then
+  SAFE_PORT=""
+fi
 
 if [ -n "$SAFE_PORT" ]; then
   if ! [[ "$SAFE_PORT" =~ ^[0-9]+$ ]] || [ "$SAFE_PORT" -lt 1 ] || [ "$SAFE_PORT" -gt 65535 ]; then
@@ -125,8 +142,25 @@ if [ -n "$SAFE_PORT" ]; then
   fi
 fi
 
+# --- Rollback automatique en cas d'échec ---
+# Si le script échoue entre la désactivation de l'ancien firewall et
+# l'activation du nouveau, le serveur resterait sans protection.
+# Le trap réactive l'ancien firewall en cas d'erreur ou d'interruption.
+rollback() {
+  if [ "${ROLLBACK_ARMED:-0}" -eq 1 ]; then
+    err "échec détecté — tentative de réactivation de $DETECTED..."
+    case "$DETECTED" in
+      firewalld) systemctl start firewalld 2>/dev/null && log "firewalld réactivé." || err "impossible de réactiver firewalld." ;;
+      ufw)       ufw --force enable 2>/dev/null && log "ufw réactivé." || err "impossible de réactiver ufw." ;;
+      nftables)  systemctl start nftables 2>/dev/null && log "nftables réactivé." || err "impossible de réactiver nftables." ;;
+    esac
+  fi
+}
+trap rollback EXIT INT TERM
+
 # --- Désactiver l'ancien firewall ---
 if [ "$DETECTED" != "aucun" ]; then
+  ROLLBACK_ARMED=1
   log "Désactivation de l'ancien firewall : $DETECTED"
   case "$DETECTED" in
     firewalld)
@@ -230,6 +264,10 @@ case "$FIREWALL" in
     ufw --force enable
     ;;
 esac
+
+# Désarmer le rollback — le nouveau firewall est actif
+ROLLBACK_ARMED=0
+trap - EXIT INT TERM
 
 echo ""
 log "$FIREWALL installé et activé avec succès."

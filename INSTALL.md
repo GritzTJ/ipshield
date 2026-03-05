@@ -132,8 +132,9 @@ sudo ./setup-firewall.sh
 Le script :
 1. Détecte le firewall actif (firewalld, ufw, nftables ou iptables)
 2. Propose un menu avec les 4 options
-3. Désactive l'ancien firewall si un autre est choisi
-4. Installe et active le nouveau firewall
+3. Détecte automatiquement le port SSH et propose de l'ouvrir avant activation (protection anti-lockout)
+4. Désactive l'ancien firewall si un autre est choisi (avec rollback automatique en cas d'échec)
+5. Installe et active le nouveau firewall
 
 ### Étape 2 : Télécharger les IP et appliquer les règles de blocage (récurrent)
 

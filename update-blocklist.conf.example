@@ -1,0 +1,30 @@
+# Configuration pour update-blocklist.sh
+# Copier vers /etc/update-blocklist.conf et adapter si besoin.
+# Ce fichier est source par le script — seules les variables ci-dessous sont attendues.
+# Permissions requises : appartenir a root, pas de group/world-writable.
+
+# --- Listes de blocage ---
+# Tableau des URLs telechargees en parallele.
+# Decommenter et modifier pour personnaliser les sources.
+#URLS=(
+#  "https://raw.githubusercontent.com/duggytuxy/Data-Shield_IPv4_Blocklist/refs/heads/main/prod_critical_data-shield_ipv4_blocklist.txt"
+#  "https://www.spamhaus.org/drop/drop.txt"
+#  "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt"
+#  "https://cinsscore.com/list/ci-badguys.txt"
+#  "https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/refs/heads/main/abuseipdb-s100-365d.ipv4"
+#)
+
+# --- Nom du set ipset ---
+# Caracteres autorises : [a-zA-Z0-9_-]
+#SET_NAME="blacklist"
+
+# --- Seuil minimum d'entrees ---
+# Si le nombre d'entrees valides est inferieur a ce seuil, le script
+# refuse la mise a jour (protection contre une source vide ou corrompue).
+#MIN_ENTRIES=1000
+
+# --- Parametres ipset ---
+# Valeurs de base pour hashsize et maxelem.
+# Le script ajuste dynamiquement si le nombre d'entrees depasse ces valeurs.
+#BASE_HASHSIZE=16384
+#BASE_MAXELEM=300000

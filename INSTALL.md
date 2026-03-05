@@ -36,8 +36,8 @@ Copier l'exemple de configuration et l'adapter si besoin :
 ```bash
 curl -fsSL -o /etc/update-blocklist.conf.example \
   https://raw.githubusercontent.com/GritzTJ/ipshield/main/update-blocklist.conf.example
-chmod 600 /etc/update-blocklist.conf.example
 cp /etc/update-blocklist.conf.example /etc/update-blocklist.conf
+chmod 600 /etc/update-blocklist.conf
 ```
 
 Par défaut, le script fonctionne sans fichier de configuration. Les variables personnalisables sont :
@@ -125,8 +125,10 @@ Le workflow se fait en 2 étapes :
 Le script `setup-firewall.sh` détecte, installe et active un firewall sur le système :
 
 ```bash
-chmod +x setup-firewall.sh
-sudo ./setup-firewall.sh
+curl -fsSL -o /root/setup-firewall.sh \
+  https://raw.githubusercontent.com/GritzTJ/ipshield/main/setup-firewall.sh
+chmod 700 /root/setup-firewall.sh
+/root/setup-firewall.sh
 ```
 
 Le script :

@@ -96,6 +96,7 @@ update-blocklist.sh [OPTIONS]
 |---|---|
 | `update-blocklist.sh` | Mise à jour ipset + détection firewall + règles de blocage |
 | `setup-firewall.sh` | Installation interactive d'un firewall (one-shot) |
+| `lookup-ip.sh` | Recherche d'une IP dans les listes de blocage (diagnostic) |
 
 ### Sources de blocage
 
@@ -201,6 +202,7 @@ update-blocklist.sh [OPTIONS]
 |---|---|
 | `update-blocklist.sh` | ipset update + firewall detection + blocking rules |
 | `setup-firewall.sh` | Interactive firewall installation (one-shot) |
+| `lookup-ip.sh` | Look up an IP across blocklist sources (diagnostic) |
 
 ### Blocklist Sources
 

@@ -28,7 +28,9 @@ curl -fsSL -o /root/update-blocklist.sh \
   https://raw.githubusercontent.com/GritzTJ/ipshield/main/update-blocklist.sh
 curl -fsSL -o /root/setup-firewall.sh \
   https://raw.githubusercontent.com/GritzTJ/ipshield/main/setup-firewall.sh
-chmod 700 /root/update-blocklist.sh /root/setup-firewall.sh
+curl -fsSL -o /root/lookup-ip.sh \
+  https://raw.githubusercontent.com/GritzTJ/ipshield/main/lookup-ip.sh
+chmod 700 /root/update-blocklist.sh /root/setup-firewall.sh /root/lookup-ip.sh
 ```
 
 ## Configuration (optionnel)
@@ -102,6 +104,17 @@ Le script :
 2. Met à jour le set ipset via swap atomique
 3. Détecte automatiquement le firewall actif
 4. Applique les règles LOG + DROP de manière idempotente
+
+### Identifier la source d'une IP bloquée
+
+Si une IP apparaît dans les logs (`BLOCKED:`), identifier sa source :
+
+```bash
+/root/lookup-ip.sh 185.199.108.133
+/root/lookup-ip.sh --verbose 1.2.3.4
+```
+
+Le script télécharge les listes à la volée et indique dans quelle(s) source(s) l'IP apparaît. Fonctionne sans root (la vérification ipset est ignorée).
 
 Vérifier que le set ipset est bien créé :
 

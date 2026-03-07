@@ -24,13 +24,9 @@ dnf install -y curl gawk coreutils ipset util-linux
 ## Installation des scripts
 
 ```bash
-curl -fsSL -o /root/update-blocklist.sh \
-  https://raw.githubusercontent.com/GritzTJ/ipshield/main/update-blocklist.sh
-curl -fsSL -o /root/setup-firewall.sh \
-  https://raw.githubusercontent.com/GritzTJ/ipshield/main/setup-firewall.sh
-curl -fsSL -o /root/lookup-ip.sh \
-  https://raw.githubusercontent.com/GritzTJ/ipshield/main/lookup-ip.sh
-chmod 700 /root/update-blocklist.sh /root/setup-firewall.sh /root/lookup-ip.sh
+git clone https://github.com/GritzTJ/ipshield.git
+cd ipshield
+chmod 700 *.sh
 ```
 
 ## Configuration (optionnel)
@@ -38,9 +34,7 @@ chmod 700 /root/update-blocklist.sh /root/setup-firewall.sh /root/lookup-ip.sh
 Copier l'exemple de configuration et l'adapter si besoin :
 
 ```bash
-curl -fsSL -o /etc/update-blocklist.conf.example \
-  https://raw.githubusercontent.com/GritzTJ/ipshield/main/update-blocklist.conf.example
-cp /etc/update-blocklist.conf.example /etc/update-blocklist.conf
+cp update-blocklist.conf.example /etc/update-blocklist.conf
 chmod 600 /etc/update-blocklist.conf
 ```
 
@@ -75,7 +69,7 @@ Ces sources sont personnalisables via la variable `URLS` dans `/etc/update-block
 Le script `setup-firewall.sh` détecte, installe et active un firewall sur le système :
 
 ```bash
-/root/setup-firewall.sh
+./setup-firewall.sh
 ```
 
 Le script :
@@ -90,13 +84,13 @@ Le script :
 Tester en mode simulation :
 
 ```bash
-/root/update-blocklist.sh --dry-run --verbose
+./update-blocklist.sh --dry-run --verbose
 ```
 
 Puis lancer la première exécution réelle :
 
 ```bash
-/root/update-blocklist.sh --verbose
+./update-blocklist.sh --verbose
 ```
 
 Le script :
@@ -110,8 +104,8 @@ Le script :
 Si une IP apparaît dans les logs (`BLOCKED:`), identifier sa source :
 
 ```bash
-/root/lookup-ip.sh 185.199.108.133
-/root/lookup-ip.sh --verbose 1.2.3.4
+./lookup-ip.sh 185.199.108.133
+./lookup-ip.sh --verbose 1.2.3.4
 ```
 
 Le script télécharge les listes à la volée et indique dans quelle(s) source(s) l'IP apparaît. Fonctionne sans root (la vérification ipset est ignorée).
@@ -164,9 +158,11 @@ crontab -e
 Ajouter les lignes suivantes :
 
 ```
-0 */12 * * * /root/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
-@reboot sleep 30 && /root/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+0 */12 * * * /chemin/vers/ipshield/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+@reboot sleep 30 && /chemin/vers/ipshield/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
 ```
+
+> Remplacer `/chemin/vers/ipshield/` par le chemin absolu du répertoire d'installation.
 
 ## Logrotate
 

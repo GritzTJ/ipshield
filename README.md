@@ -59,9 +59,9 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 ### Installation
 
 ```bash
-curl -fsSL -o /root/update-blocklist.sh \
-  https://raw.githubusercontent.com/GritzTJ/ipshield/main/update-blocklist.sh
-chmod 700 /root/update-blocklist.sh
+git clone https://github.com/GritzTJ/ipshield.git
+cd ipshield
+chmod 700 *.sh
 ```
 
 ### Utilisation
@@ -81,13 +81,13 @@ update-blocklist.sh [OPTIONS]
 
 ```bash
 # Test en mode simulation
-/root/update-blocklist.sh --dry-run --verbose
+./update-blocklist.sh --dry-run --verbose
 
 # Exécution réelle
-/root/update-blocklist.sh --verbose
+./update-blocklist.sh --verbose
 
 # Avec configuration personnalisée
-/root/update-blocklist.sh -c /etc/my-blocklist.conf -v
+./update-blocklist.sh -c /etc/my-blocklist.conf -v
 ```
 
 ### Scripts
@@ -165,9 +165,9 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 ### Installation
 
 ```bash
-curl -fsSL -o /root/update-blocklist.sh \
-  https://raw.githubusercontent.com/GritzTJ/ipshield/main/update-blocklist.sh
-chmod 700 /root/update-blocklist.sh
+git clone https://github.com/GritzTJ/ipshield.git
+cd ipshield
+chmod 700 *.sh
 ```
 
 ### Usage
@@ -187,13 +187,13 @@ update-blocklist.sh [OPTIONS]
 
 ```bash
 # Test in simulation mode
-/root/update-blocklist.sh --dry-run --verbose
+./update-blocklist.sh --dry-run --verbose
 
 # Real execution
-/root/update-blocklist.sh --verbose
+./update-blocklist.sh --verbose
 
 # With custom configuration
-/root/update-blocklist.sh -c /etc/my-blocklist.conf -v
+./update-blocklist.sh -c /etc/my-blocklist.conf -v
 ```
 
 ### Scripts

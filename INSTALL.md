@@ -21,7 +21,7 @@ dnf install -y curl gawk coreutils ipset util-linux
 
 > `sort`, `wc`, `date` et `comm` sont fournis par **coreutils**, `flock` par **util-linux**, `logger` par **bsdutils** (Debian) ou **util-linux** (Fedora). `awk` est couvert par **gawk**.
 
-## Installation des scripts
+## Installation
 
 ```bash
 git clone https://github.com/GritzTJ/ipshield.git
@@ -62,7 +62,7 @@ Le script télécharge et agrège les listes suivantes :
 
 Ces sources sont personnalisables via la variable `URLS` dans `/etc/update-blocklist.conf`.
 
-## Configuration du firewall
+## Utilisation
 
 ### Étape 1 : Installer un firewall (une seule fois)
 
@@ -99,6 +99,14 @@ Le script :
 3. Détecte automatiquement le firewall actif
 4. Applique les règles LOG + DROP de manière idempotente
 
+Vérifier que le set ipset est bien créé :
+
+```bash
+ipset list blacklist | head -10
+```
+
+> `update-blocklist.sh` fonctionne seul (sans `setup-firewall.sh`) car il auto-détecte le firewall en place.
+
 ### Identifier la source d'une IP bloquée
 
 Si une IP apparaît dans les logs (`BLOCKED:`), identifier sa source :
@@ -110,15 +118,7 @@ Si une IP apparaît dans les logs (`BLOCKED:`), identifier sa source :
 
 Le script télécharge les listes à la volée et indique dans quelle(s) source(s) l'IP apparaît. Fonctionne sans root (la vérification ipset est ignorée).
 
-Vérifier que le set ipset est bien créé :
-
-```bash
-ipset list blacklist | head -10
-```
-
-> `update-blocklist.sh` fonctionne seul (sans `setup-firewall.sh`) car il auto-détecte le firewall en place.
-
-### Support Docker
+## Support Docker
 
 Sur un hôte Docker, le trafic destiné aux conteneurs (ports publiés via `-p` / `ports:`) passe par la chaîne `FORWARD`, pas `INPUT`. Sans protection supplémentaire, les IP bloquées atteignent quand même les conteneurs.
 
@@ -138,16 +138,7 @@ iptables -L DOCKER-USER -n
 
 Les règles LOG + DROP avec `match-set blacklist src` doivent apparaître.
 
-### Firewalls supportés
-
-| Firewall | Description |
-|---|---|
-| **iptables** | Classique, compatible partout, simple |
-| **nftables** | Successeur d'iptables, performant, syntaxe unifiée |
-| **firewalld** | Gestion par zones, rechargement dynamique, courant sur Fedora/RHEL |
-| **ufw** | Simple d'utilisation, courant sur Ubuntu |
-
-## Cronjob
+## Automatisation
 
 Exécution toutes les 12 heures et au démarrage :
 
@@ -164,7 +155,9 @@ Ajouter les lignes suivantes :
 
 > Remplacer `/chemin/vers/ipshield/` par le chemin absolu du répertoire d'installation.
 
-## Logrotate
+## Logs
+
+### Logrotate du script
 
 Créer le fichier `/etc/logrotate.d/update-blocklist` :
 
@@ -181,7 +174,7 @@ cat > /etc/logrotate.d/update-blocklist << 'EOF'
 EOF
 ```
 
-## Logs des IP bloquées
+### Logs des IP bloquées
 
 Les règles appliquées par `update-blocklist.sh` utilisent toutes le préfixe `BLOCKED: ` dans leurs logs, quel que soit le firewall :
 
@@ -216,17 +209,11 @@ systemctl restart rsyslog
 
 Le `& stop` empêche les messages `BLOCKED: ` d'apparaître aussi dans `/var/log/syslog` ou `/var/log/kern.log`.
 
-### Note pour ufw
+> **Note ufw** : les paquets bloqués par nos règles dans `before.rules` apparaissent dans `/var/log/blocked-ips.log` via rsyslog, mais **pas** dans `/var/log/ufw.log` car nos règles LOG+DROP sont exécutées avant le logging propre à ufw.
 
-ufw possède son propre système de logs (`/var/log/ufw.log`). Les paquets bloqués par nos règles dans `before.rules` apparaissent dans `/var/log/blocked-ips.log` via rsyslog (grâce au préfixe `BLOCKED: `), mais **pas** dans `/var/log/ufw.log` car nos règles LOG+DROP sont exécutées avant le logging propre à ufw.
+> **Note nftables** : les règles de blocage sont appliquées via `iptables-nft`. Le mécanisme de log est identique à iptables (`-j LOG`), capturé par le même filtre rsyslog.
 
-Si le logging ufw est activé (`ufw logging on`), il ne concerne que les règles gérées par ufw lui-même, pas nos règles personnalisées.
-
-### Note pour nftables
-
-Les règles de blocage nftables sont appliquées via `iptables-nft` (nftables ne peut pas référencer les sets ipset nativement). Le mécanisme de log est donc identique à iptables (`-j LOG`), avec la même infrastructure kernel → syslog. Le filtre rsyslog ci-dessus les capture de la même manière.
-
-### Logrotate
+### Logrotate des IP bloquées
 
 Créer le fichier `/etc/logrotate.d/blocked-ips` :
 
@@ -245,6 +232,15 @@ cat > /etc/logrotate.d/blocked-ips << 'EOF'
 }
 EOF
 ```
+
+## Firewalls supportés
+
+| Firewall | Description |
+|---|---|
+| **iptables** | Classique, compatible partout, simple |
+| **nftables** | Successeur d'iptables, performant, syntaxe unifiée |
+| **firewalld** | Gestion par zones, rechargement dynamique, courant sur Fedora/RHEL |
+| **ufw** | Simple d'utilisation, courant sur Ubuntu |
 
 ## Configuration manuelle du firewall (alternative)
 

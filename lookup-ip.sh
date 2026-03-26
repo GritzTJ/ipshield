@@ -228,11 +228,18 @@ else
 fi
 echo ""
 
+# --- Avertissement sources HTTP ---
+for url in "${URLS[@]}"; do
+  if [[ "$url" =~ ^http:// ]]; then
+    err "Avertissement : source HTTP (non chiffré) : $url"
+  fi
+done
+
 # --- Téléchargements parallèles ---
 declare -a DL_PIDS=()
 for i in "${!URLS[@]}"; do
   curl "${CURL_OPTS[@]}" "${URLS[$i]}" -o "${TMP_DIR}/dl.${i}" 2>/dev/null &
-  DL_PIDS+=($!)
+  DL_PIDS+=("$!")
 done
 
 declare -a DL_OK=()

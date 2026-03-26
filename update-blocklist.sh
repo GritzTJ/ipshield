@@ -251,6 +251,13 @@ log "--- Mise à jour du : $(date '+%Y-%m-%d %H:%M:%S %Z') ---"
 exec 9>"$LOCK_FILE"
 flock -n 9 || { err "Erreur : une autre instance tourne déjà."; exit 1; }
 
+# --- Avertissement sources HTTP ---
+for url in "${URLS[@]}"; do
+  if [[ "$url" =~ ^http:// ]]; then
+    err "Avertissement : source HTTP (non chiffré) : $url"
+  fi
+done
+
 # --- Téléchargements parallèles ---
 fail=0
 ok=0
@@ -258,7 +265,7 @@ declare -a DL_PIDS=()
 
 for i in "${!URLS[@]}"; do
   curl "${CURL_OPTS[@]}" "${URLS[$i]}" -o "${TMP_DIR}/dl.${i}" &
-  DL_PIDS+=($!)
+  DL_PIDS+=("$!")
 done
 
 declare -a DL_OK=()
@@ -327,7 +334,7 @@ for i in "${DL_OK[@]}"; do
   fi
 done
 
-cat "${TMP_DIR}"/src.* 2>/dev/null | sort -u > "$UNIQ_FILE"
+cat "${TMP_DIR}"/src.* 2>/dev/null | sort -u > "$UNIQ_FILE" || true
 
 if [ ! -s "$UNIQ_FILE" ]; then
   err "Erreur : Aucune IP/CIDR valide récupérée. Annulation."

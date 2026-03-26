@@ -2,6 +2,19 @@
 set -euo pipefail
 umask 077
 
+# --- Usage / aide ---
+case "${1:-}" in
+  -h|--help)
+    cat <<'EOF'
+Usage: setup-firewall.sh
+
+Script interactif d'installation et de configuration du firewall.
+Détecte le firewall actif, propose un choix parmi iptables, nftables,
+firewalld et ufw, puis effectue la transition avec protection anti-lockout SSH.
+EOF
+    exit 0 ;;
+esac
+
 # --- Fonctions ---
 log() { echo "$*"; }
 err() { echo "ERREUR : $*" >&2; }
@@ -159,6 +172,13 @@ rollback() {
       nftables)
         if systemctl start nftables 2>/dev/null; then log "nftables réactivé."
         else err "impossible de réactiver nftables."; fi ;;
+      iptables)
+        if [ -n "${IPTABLES_BACKUP:-}" ] && [ -f "$IPTABLES_BACKUP" ]; then
+          if iptables-restore < "$IPTABLES_BACKUP" 2>/dev/null; then log "Règles iptables restaurées."
+          else err "impossible de restaurer les règles iptables."; fi
+        else
+          err "aucune sauvegarde iptables disponible."
+        fi ;;
     esac
   fi
 }
@@ -181,6 +201,9 @@ if [ "$DETECTED" != "aucun" ]; then
       systemctl disable nftables
       ;;
     iptables)
+      # Sauvegarde des règles avant flush (pour rollback en cas d'échec)
+      IPTABLES_BACKUP="$(mktemp)"
+      iptables-save > "$IPTABLES_BACKUP"
       for table in filter nat mangle raw; do
         iptables -t "$table" -F 2>/dev/null || true
         iptables -t "$table" -X 2>/dev/null || true
@@ -273,6 +296,7 @@ esac
 
 # Désarmer le rollback — le nouveau firewall est actif
 ROLLBACK_ARMED=0
+rm -f "${IPTABLES_BACKUP:-}" 2>/dev/null || true
 trap - EXIT INT TERM
 
 echo ""

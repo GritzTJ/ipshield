@@ -10,7 +10,11 @@ Usage: setup-firewall.sh
 
 Script interactif d'installation et de configuration du firewall.
 Détecte le firewall actif, propose un choix parmi iptables, nftables,
-firewalld et ufw, puis effectue la transition avec protection anti-lockout SSH.
+firewalld et ufw, puis effectue la transition.
+
+Avant activation, détecte automatiquement les ports TCP en écoute
+(non-loopback) et propose de les autoriser pour éviter de couper
+des services exposés (SSH, web, etc.).
 EOF
     exit 0 ;;
 esac
@@ -127,32 +131,66 @@ fi
 echo ""
 log "Installation et activation de : $FIREWALL"
 
-# --- Demander si un port doit être ouvert (protection anti-lockout SSH) ---
-# Détection automatique du port SSH pour pré-remplir la valeur par défaut
-SSH_PORT_DETECTED=""
-if command -v ss >/dev/null 2>&1; then
-  SSH_PORT_DETECTED="$(ss -tlnp 2>/dev/null | awk '/sshd/{for(i=1;i<=NF;i++){if($i~/:/) {sub(/.*:/,"",$i); if($i+0>0) {print $i; exit}}}}')"
-fi
+# --- Détection des ports TCP en écoute (non-loopback) ---
+# Permet de pré-remplir la liste des ports à autoriser avant activation
+# du nouveau firewall, pour éviter de couper des services exposés.
+detect_listening_ports() {
+  if ! command -v ss >/dev/null 2>&1; then
+    return 0
+  fi
+  ss -tlnp 2>/dev/null | awk '
+    NR == 1 { next }
+    {
+      addr_port = $4
+      n = split(addr_port, parts, ":")
+      port = parts[n]
+      addr = substr(addr_port, 1, length(addr_port) - length(port) - 1)
+      # Skip loopback (IPv4 127.0.0.0/8 et IPv6 [::1])
+      if (addr == "[::1]" || addr ~ /^127\./) next
+      if (port !~ /^[0-9]+$/) next
+      proc = "?"
+      for (i = 1; i <= NF; i++) {
+        if (match($i, /\("[^"]+"/)) {
+          # RLENGTH inclut ("...") → on retire 3 (les 2 premiers caractères et le " final)
+          proc = substr($i, RSTART+2, RLENGTH-3)
+          break
+        }
+      }
+      print port, proc
+    }
+  ' | sort -n | awk '!seen[$1]++'
+}
+
+LISTENING="$(detect_listening_ports)"
 
 echo ""
-if [ -n "$SSH_PORT_DETECTED" ]; then
-  read -rp "Port à ouvrir avant activation (défaut: $SSH_PORT_DETECTED, 'non' pour passer) : " SAFE_PORT
-  # Entrée vide = accepter le port détecté
-  [ -z "$SAFE_PORT" ] && SAFE_PORT="$SSH_PORT_DETECTED"
+if [ -n "$LISTENING" ]; then
+  log "Ports TCP actuellement en écoute (non-loopback) :"
+  while IFS=' ' read -r port proc; do
+    printf "  %-12s %s\n" "${port}/tcp" "$proc"
+  done <<< "$LISTENING"
+  echo ""
+  DEFAULT_PORTS="$(echo "$LISTENING" | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')"
+  read -rp "Ports à ouvrir avant activation (défaut: $DEFAULT_PORTS, éditer la liste ou 'non' pour passer) : " SAFE_PORTS
+  [ -z "$SAFE_PORTS" ] && SAFE_PORTS="$DEFAULT_PORTS"
 else
-  read -rp "Port à ouvrir avant activation (ex: port SSH, vide pour passer) : " SAFE_PORT
+  read -rp "Ports à ouvrir avant activation (séparés par espaces, vide pour passer) : " SAFE_PORTS
 fi
 
 # Gestion du refus explicite
-if [ "$SAFE_PORT" = "non" ] || [ "$SAFE_PORT" = "no" ] || [ "$SAFE_PORT" = "n" ]; then
-  SAFE_PORT=""
+if [ "$SAFE_PORTS" = "non" ] || [ "$SAFE_PORTS" = "no" ] || [ "$SAFE_PORTS" = "n" ]; then
+  SAFE_PORTS=""
 fi
 
-if [ -n "$SAFE_PORT" ]; then
-  if ! [[ "$SAFE_PORT" =~ ^[0-9]+$ ]] || [ "$SAFE_PORT" -lt 1 ] || [ "$SAFE_PORT" -gt 65535 ]; then
-    err "port invalide : $SAFE_PORT"
-    exit 1
-  fi
+# Validation : chaque port doit être 1-65535, puis dédup + tri
+if [ -n "$SAFE_PORTS" ]; then
+  for p in $SAFE_PORTS; do
+    if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
+      err "port invalide : $p"
+      exit 1
+    fi
+  done
+  SAFE_PORTS="$(echo "$SAFE_PORTS" | tr ' ' '\n' | sort -un | tr '\n' ' ' | sed 's/ *$//')"
 fi
 
 # --- Rollback automatique en cas d'échec ---
@@ -266,38 +304,46 @@ esac
 log "Activation de $FIREWALL..."
 case "$FIREWALL" in
   iptables)
-    if [ -n "$SAFE_PORT" ]; then
-      iptables -I INPUT -p tcp --dport "$SAFE_PORT" -j ACCEPT
-      if command -v ip6tables >/dev/null 2>&1; then
-        ip6tables -I INPUT -p tcp --dport "$SAFE_PORT" -j ACCEPT
-      fi
-      log "Port $SAFE_PORT/tcp ouvert (iptables IPv4 + IPv6)."
+    if [ -n "$SAFE_PORTS" ]; then
+      for p in $SAFE_PORTS; do
+        iptables -I INPUT -p tcp --dport "$p" -j ACCEPT
+        if command -v ip6tables >/dev/null 2>&1; then
+          ip6tables -I INPUT -p tcp --dport "$p" -j ACCEPT
+        fi
+      done
+      log "Ports ouverts (iptables IPv4 + IPv6) : $SAFE_PORTS"
     fi
     log "iptables est prêt (pas de service systemd à activer)."
     ;;
   nftables)
     systemctl enable nftables
     systemctl start nftables
-    if [ -n "$SAFE_PORT" ]; then
+    if [ -n "$SAFE_PORTS" ]; then
       nft add table inet admin_access 2>/dev/null || true
       nft add chain inet admin_access input '{ type filter hook input priority -10 ; policy accept ; }' 2>/dev/null || true
-      nft add rule inet admin_access input tcp dport "$SAFE_PORT" accept
-      log "Port $SAFE_PORT/tcp ouvert (nftables)."
+      for p in $SAFE_PORTS; do
+        nft add rule inet admin_access input tcp dport "$p" accept
+      done
+      log "Ports ouverts (nftables) : $SAFE_PORTS"
     fi
     ;;
   firewalld)
     systemctl enable firewalld
     systemctl start firewalld
-    if [ -n "$SAFE_PORT" ]; then
-      firewall-cmd --permanent --add-port="$SAFE_PORT"/tcp
+    if [ -n "$SAFE_PORTS" ]; then
+      for p in $SAFE_PORTS; do
+        firewall-cmd --permanent --add-port="$p"/tcp
+      done
       firewall-cmd --reload
-      log "Port $SAFE_PORT/tcp ouvert (firewalld)."
+      log "Ports ouverts (firewalld) : $SAFE_PORTS"
     fi
     ;;
   ufw)
-    if [ -n "$SAFE_PORT" ]; then
-      ufw allow "$SAFE_PORT"/tcp
-      log "Port $SAFE_PORT/tcp ouvert (ufw)."
+    if [ -n "$SAFE_PORTS" ]; then
+      for p in $SAFE_PORTS; do
+        ufw allow "$p"/tcp
+      done
+      log "Ports ouverts (ufw) : $SAFE_PORTS"
     fi
     ufw --force enable
     ;;

@@ -218,10 +218,12 @@ echo ""
 # --- Test ipset (si root + ipset disponible) ---
 echo "--- Statut ipset ---"
 if [ "$(id -u)" -eq 0 ] && command -v ipset >/dev/null 2>&1; then
-  if ipset test "$SET_NAME" "$TARGET_IP" 2>/dev/null; then
-    echo "  Set '$SET_NAME' : PRÉSENT (blocage actif)"
+  if ! ipset list -n 2>/dev/null | awk -v s="$SET_NAME" '$0==s{found=1} END{exit(found?0:1)}'; then
+    echo "  Set '$SET_NAME' : n'existe pas (lancez update-blocklist.sh d'abord)"
+  elif ipset test "$SET_NAME" "$TARGET_IP" 2>/dev/null; then
+    echo "  Set '$SET_NAME' : IP PRÉSENTE (blocage actif)"
   else
-    echo "  Set '$SET_NAME' : absent"
+    echo "  Set '$SET_NAME' : IP absente du set"
   fi
 else
   echo "  (vérification ipset ignorée — nécessite root et ipset)"

@@ -178,6 +178,10 @@ rollback() {
           else err "impossible de restaurer les règles iptables."; fi
         else
           err "aucune sauvegarde iptables disponible."
+        fi
+        if [ -n "${IPTABLES_BACKUP6:-}" ] && [ -f "$IPTABLES_BACKUP6" ]; then
+          if ip6tables-restore < "$IPTABLES_BACKUP6" 2>/dev/null; then log "Règles ip6tables restaurées."
+          else err "impossible de restaurer les règles ip6tables."; fi
         fi ;;
     esac
   fi
@@ -209,6 +213,8 @@ if [ "$DETECTED" != "aucun" ]; then
         iptables -t "$table" -X 2>/dev/null || true
       done
       if command -v ip6tables >/dev/null 2>&1; then
+        IPTABLES_BACKUP6="$(mktemp)"
+        ip6tables-save > "$IPTABLES_BACKUP6"
         for table in filter nat mangle raw; do
           ip6tables -t "$table" -F 2>/dev/null || true
           ip6tables -t "$table" -X 2>/dev/null || true
@@ -262,7 +268,10 @@ case "$FIREWALL" in
   iptables)
     if [ -n "$SAFE_PORT" ]; then
       iptables -I INPUT -p tcp --dport "$SAFE_PORT" -j ACCEPT
-      log "Port $SAFE_PORT/tcp ouvert (iptables)."
+      if command -v ip6tables >/dev/null 2>&1; then
+        ip6tables -I INPUT -p tcp --dport "$SAFE_PORT" -j ACCEPT
+      fi
+      log "Port $SAFE_PORT/tcp ouvert (iptables IPv4 + IPv6)."
     fi
     log "iptables est prêt (pas de service systemd à activer)."
     ;;
@@ -294,9 +303,42 @@ case "$FIREWALL" in
     ;;
 esac
 
+# --- Vérification post-activation : le firewall répond-il ? ---
+# Si la vérification échoue, on quitte avec une erreur — le trap rollback
+# ré-activera l'ancien firewall (ROLLBACK_ARMED toujours à 1).
+log "Vérification de l'état du firewall..."
+case "$FIREWALL" in
+  iptables)
+    if ! iptables -L -n >/dev/null 2>&1; then
+      err "iptables ne répond pas après installation."
+      exit 1
+    fi
+    ;;
+  nftables)
+    if ! systemctl is-active --quiet nftables; then
+      err "nftables n'est pas actif après start (systemctl is-active a échoué)."
+      exit 1
+    fi
+    ;;
+  firewalld)
+    state="$(firewall-cmd --state 2>/dev/null || echo "unknown")"
+    if [ "$state" != "running" ]; then
+      err "firewalld n'est pas en état 'running' (état: $state)."
+      exit 1
+    fi
+    ;;
+  ufw)
+    if ! ufw status 2>/dev/null | grep -qi "^Status: active"; then
+      err "ufw n'est pas actif après --force enable."
+      exit 1
+    fi
+    ;;
+esac
+log "$FIREWALL est opérationnel."
+
 # Désarmer le rollback — le nouveau firewall est actif
 ROLLBACK_ARMED=0
-rm -f "${IPTABLES_BACKUP:-}" 2>/dev/null || true
+rm -f "${IPTABLES_BACKUP:-}" "${IPTABLES_BACKUP6:-}" 2>/dev/null || true
 trap - EXIT INT TERM
 
 echo ""

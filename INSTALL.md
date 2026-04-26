@@ -43,7 +43,9 @@ Par défaut, le script fonctionne sans fichier de configuration. Les variables p
 | Variable | Défaut | Description |
 |---|---|---|
 | `URLS` | voir ci-dessous | Tableau des URLs de listes de blocage |
-| `SET_NAME` | `blacklist` | Nom du set ipset |
+| `SET_NAME` | `blacklist` | Nom du set ipset blacklist |
+| `WHITELIST_SET_NAME` | `${SET_NAME}-allow` | Nom du set ipset whitelist |
+| `WHITELIST` | `()` (vide) | Tableau d'IP/CIDR IPv4 toujours autorisés (voir [Whitelist](#whitelist)) |
 | `MIN_ENTRIES` | `1000` | Seuil minimum d'entrées (protection anti-purge) |
 | `BASE_HASHSIZE` | `16384` | Hashsize de base pour ipset |
 | `BASE_MAXELEM` | `300000` | Maxelem de base pour ipset |
@@ -117,6 +119,46 @@ Si une IP apparaît dans les logs (`BLOCKED:`), identifier sa source :
 ```
 
 Le script télécharge les listes à la volée et indique dans quelle(s) source(s) l'IP apparaît. Fonctionne sans root (la vérification ipset est ignorée).
+
+## Whitelist
+
+Pour autoriser certaines IP ou subnets à contourner le blocage (typiquement vos IP/subnets de management), définir la variable `WHITELIST` dans `/etc/update-blocklist.conf` :
+
+```bash
+WHITELIST=(
+  "203.0.113.42"
+  "198.51.100.0/24"
+)
+```
+
+Au prochain run, le script :
+
+1. Crée un second ipset (`blacklist-allow` par défaut) via swap atomique
+2. Insère une règle `ACCEPT` en position 1 sur `INPUT` (et `DOCKER-USER` si présent)
+3. Si `WHITELIST` est ensuite vidé : la règle ACCEPT et l'ipset whitelist sont automatiquement retirés au prochain run
+
+> **Attention** : la règle ACCEPT contourne **l'ensemble du filtrage firewall**, pas seulement la blocklist. Une IP whitelistée a un accès complet au serveur, indépendamment des autres règles. À réserver aux IP/subnets de confiance.
+
+Vérification :
+
+```bash
+ipset list blacklist-allow | head -10
+iptables -S INPUT | grep blacklist-allow
+```
+
+## Désinstallation
+
+`uninstall.sh` retire les règles ipshield (LOG/DROP blocklist + ACCEPT whitelist), détruit les ipsets associés, et restaure `/etc/ufw/before.rules.bak` si présent. Il **ne désinstalle pas** le firewall ni les paquets.
+
+```bash
+# Mode dry-run (défaut) : affiche ce qui serait fait
+./uninstall.sh
+
+# Application réelle (avec confirmation interactive)
+./uninstall.sh --apply
+```
+
+Le script affiche aussi les lignes cron référençant `update-blocklist.sh`, à retirer manuellement (`crontab -e`).
 
 ## Support Docker
 

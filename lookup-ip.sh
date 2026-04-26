@@ -63,6 +63,7 @@ URLS=(
   "https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/refs/heads/main/abuseipdb-s100-365d.ipv4"
 )
 SET_NAME="blacklist"
+WHITELIST=()
 VERBOSE=0
 
 # --- Source config file (si existe) ---
@@ -90,6 +91,9 @@ fi
 
 # --- Appliquer overrides CLI ---
 [ -n "$CLI_VERBOSE" ] && VERBOSE=1
+
+# --- Whitelist set name (dérivé si non défini) ---
+: "${WHITELIST_SET_NAME:=${SET_NAME}-allow}"
 
 # --- Fonctions ---
 log() { echo "$*"; }
@@ -224,6 +228,14 @@ if [ "$(id -u)" -eq 0 ] && command -v ipset >/dev/null 2>&1; then
     echo "  Set '$SET_NAME' : IP PRÉSENTE (blocage actif)"
   else
     echo "  Set '$SET_NAME' : IP absente du set"
+  fi
+  # Whitelist
+  if ipset list -n 2>/dev/null | awk -v s="$WHITELIST_SET_NAME" '$0==s{found=1} END{exit(found?0:1)}'; then
+    if ipset test "$WHITELIST_SET_NAME" "$TARGET_IP" 2>/dev/null; then
+      echo "  Set '$WHITELIST_SET_NAME' : IP PRÉSENTE (whitelist — bypass blocklist)"
+    else
+      echo "  Set '$WHITELIST_SET_NAME' : IP absente"
+    fi
   fi
 else
   echo "  (vérification ipset ignorée — nécessite root et ipset)"

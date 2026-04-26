@@ -18,6 +18,23 @@
 # Caracteres autorises : [a-zA-Z0-9_-]
 #SET_NAME="blacklist"
 
+# --- Nom du set ipset whitelist ---
+# Par defaut : "${SET_NAME}-allow" (ex: "blacklist-allow").
+# Caracteres autorises : [a-zA-Z0-9_-], doit etre different de SET_NAME.
+#WHITELIST_SET_NAME="blacklist-allow"
+
+# --- Whitelist : IP ou subnets toujours autorises (bypass blocklist + tout le firewall) ---
+# Format : tableau d'adresses IPv4 ou CIDR (notation x.y.z.w ou x.y.z.w/N).
+# Une regle iptables ACCEPT est inseree en position 1 sur INPUT (et DOCKER-USER si present).
+# ATTENTION : les IP listees ici contournent l'ensemble du filtrage firewall, pas
+# uniquement la blocklist. A reserver aux IP/subnets de management de confiance.
+# Si la liste est vide ou commentee, l'ipset whitelist et la regle ACCEPT sont
+# automatiquement supprimes au prochain run.
+#WHITELIST=(
+#  "203.0.113.42"
+#  "198.51.100.0/24"
+#)
+
 # --- Seuil minimum d'entrees ---
 # Si le nombre d'entrees valides est inferieur a ce seuil, le script
 # refuse la mise a jour (protection contre une source vide ou corrompue).

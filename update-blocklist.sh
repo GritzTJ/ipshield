@@ -53,6 +53,7 @@ URLS=(
   "https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/refs/heads/main/abuseipdb-s100-365d.ipv4"
 )
 SET_NAME="blacklist"
+WHITELIST=()
 DRY_RUN=0
 VERBOSE=0
 MIN_ENTRIES=1000
@@ -85,6 +86,21 @@ if [[ ! "$SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
   exit 1
 fi
 
+# --- Whitelist set name (dérivé de SET_NAME si non défini) ---
+: "${WHITELIST_SET_NAME:=${SET_NAME}-allow}"
+if [[ ! "$WHITELIST_SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  echo "Erreur : WHITELIST_SET_NAME invalide ('$WHITELIST_SET_NAME'). Seuls [a-zA-Z0-9_-] sont autorisés." >&2
+  exit 1
+fi
+if [ "${#WHITELIST_SET_NAME}" -gt 31 ]; then
+  echo "Erreur : WHITELIST_SET_NAME trop long (${#WHITELIST_SET_NAME} > 31)." >&2
+  exit 1
+fi
+if [ "$WHITELIST_SET_NAME" = "$SET_NAME" ]; then
+  echo "Erreur : WHITELIST_SET_NAME ne doit pas être identique à SET_NAME." >&2
+  exit 1
+fi
+
 # --- Variables dérivées ---
 IPSET_TYPE="hash:net"
 IPSET_FAMILY="inet"
@@ -94,10 +110,17 @@ TMP_DIR="$(mktemp -d -p /run "${SET_NAME}.XXXXXX")"
 UNIQ_FILE="${TMP_DIR}/uniq"
 TMP_FILE="${TMP_DIR}/restore"
 TEMP_SET="${SET_NAME}-tmp-$$"
+WL_TEMP_SET="${WHITELIST_SET_NAME}-tmp-$$"
+WL_FILE="${TMP_DIR}/whitelist"
+WL_TMP_FILE="${TMP_DIR}/wl_restore"
 CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize 52428800 --retry 3 --retry-delay 2 --retry-all-errors )
 
 if [ "${#TEMP_SET}" -gt 31 ]; then
   echo "Erreur : nom de set temporaire trop long (${#TEMP_SET} > 31)" >&2
+  exit 1
+fi
+if [ "${#WL_TEMP_SET}" -gt 31 ]; then
+  echo "Erreur : nom de set whitelist temporaire trop long (${#WL_TEMP_SET} > 31)" >&2
   exit 1
 fi
 
@@ -109,6 +132,7 @@ fmt_num() { printf "%d" "$1" | sed ':a;s/\([0-9]\)\([0-9]\{3\}\)\($\| \)/\1 \2\3
 cleanup() {
   rm -rf -- "$TMP_DIR" 2>/dev/null || true
   ipset destroy "$TEMP_SET" 2>/dev/null || true
+  ipset destroy "$WL_TEMP_SET" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
@@ -162,6 +186,48 @@ _apply_iptables_rules() {
   return 1
 }
 
+# --- Insertion idempotente de la règle ACCEPT whitelist en position 1 ---
+_apply_whitelist_iptables() {
+  local chain="$1"
+  iptables -C "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null || \
+    iptables -I "$chain" 1 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
+}
+
+# --- Suppression des règles ACCEPT whitelist (toutes occurrences) ---
+_cleanup_whitelist_iptables() {
+  local chain="$1"
+  while iptables -C "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; do
+    iptables -D "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
+  done
+}
+
+# --- Application/cleanup whitelist sur une chaîne iptables ---
+_whitelist_or_cleanup_iptables() {
+  local chain="$1"
+  if [ "${#WHITELIST[@]}" -gt 0 ]; then
+    _apply_whitelist_iptables "$chain"
+  else
+    _cleanup_whitelist_iptables "$chain"
+  fi
+}
+
+# --- Application/cleanup whitelist firewalld (return 0 si action effectuée) ---
+_whitelist_or_cleanup_firewalld() {
+  local chain="$1"
+  if [ "${#WHITELIST[@]}" -gt 0 ]; then
+    if ! firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; then
+      firewall-cmd --permanent --direct --add-rule ipv4 filter "$chain" 0 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
+      return 0
+    fi
+  else
+    if firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; then
+      firewall-cmd --permanent --direct --remove-rule ipv4 filter "$chain" 0 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
+      return 0
+    fi
+  fi
+  return 1
+}
+
 # --- Application des règles firewall ---
 apply_firewall_rules() {
   local fw="$1"
@@ -171,8 +237,10 @@ apply_firewall_rules() {
   case "$fw" in
     iptables)
       _apply_iptables_rules INPUT && log "Règles iptables ajoutées (LOG + DROP)."
+      _whitelist_or_cleanup_iptables INPUT
       if detect_docker; then
         _apply_iptables_rules DOCKER-USER && log "Règles iptables DOCKER-USER ajoutées (LOG + DROP)."
+        _whitelist_or_cleanup_iptables DOCKER-USER
         docker_protected=1
       fi
       ;;
@@ -183,8 +251,10 @@ apply_firewall_rules() {
       # tout en supportant le match ipset via le module xt_set du noyau.
       need_cmd iptables
       _apply_iptables_rules INPUT && log "Règles nftables ajoutées via iptables-nft (LOG + DROP)."
+      _whitelist_or_cleanup_iptables INPUT
       if detect_docker; then
         _apply_iptables_rules DOCKER-USER && log "Règles nftables DOCKER-USER ajoutées via iptables-nft (LOG + DROP)."
+        _whitelist_or_cleanup_iptables DOCKER-USER
         docker_protected=1
       fi
       ;;
@@ -197,6 +267,7 @@ apply_firewall_rules() {
         need_reload=1
         log "Règles firewalld ajoutées (LOG + DROP)."
       fi
+      _whitelist_or_cleanup_firewalld INPUT && need_reload=1
       if detect_docker; then
         if ! firewall-cmd --permanent --direct --query-rule ipv4 filter DOCKER-USER 1 -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
           firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 0 -m set --match-set "$SET_NAME" src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
@@ -204,6 +275,7 @@ apply_firewall_rules() {
           need_reload=1
           log "Règles firewalld DOCKER-USER ajoutées (LOG + DROP)."
         fi
+        _whitelist_or_cleanup_firewalld DOCKER-USER && need_reload=1
         docker_protected=1
       fi
       [ "$need_reload" -eq 1 ] && firewall-cmd --reload
@@ -221,9 +293,27 @@ apply_firewall_rules() {
         ufw reload
         log "Règles ufw ajoutées (LOG + DROP)."
       fi
+      # Whitelist : ajout/retrait dans before.rules en tête de ufw-before-input
+      local wl_marker="match-set $WHITELIST_SET_NAME src -j ACCEPT"
+      local wl_present=0
+      grep -q "$wl_marker" /etc/ufw/before.rules 2>/dev/null && wl_present=1
+      if [ "${#WHITELIST[@]}" -gt 0 ] && [ "$wl_present" -eq 0 ]; then
+        cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
+        # Insère la règle ACCEPT juste avant la première règle ufw-before-input du blocklist
+        sed -i "/-A ufw-before-input -m set --match-set $SET_NAME src/i\\
+-A ufw-before-input -m set --match-set $WHITELIST_SET_NAME src -j ACCEPT" /etc/ufw/before.rules
+        ufw reload
+        log "Règle whitelist ufw ajoutée (ACCEPT)."
+      elif [ "${#WHITELIST[@]}" -eq 0 ] && [ "$wl_present" -eq 1 ]; then
+        cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
+        sed -i "/match-set $WHITELIST_SET_NAME src -j ACCEPT/d" /etc/ufw/before.rules
+        ufw reload
+        log "Règle whitelist ufw retirée (ACCEPT)."
+      fi
       # Docker utilise iptables directement, hors du périmètre ufw
       if detect_docker; then
         _apply_iptables_rules DOCKER-USER && log "Règles DOCKER-USER ajoutées (LOG + DROP)."
+        _whitelist_or_cleanup_iptables DOCKER-USER
         docker_protected=1
       fi
       ;;
@@ -334,6 +424,31 @@ for i in "${DL_OK[@]}"; do
   fi
 done
 
+# --- Validation des entrées WHITELIST (mêmes règles que les listes externes) ---
+if [ "${#WHITELIST[@]}" -gt 0 ]; then
+  : > "$WL_FILE"
+  invalid_wl=()
+  for entry in "${WHITELIST[@]}"; do
+    canonical="$(printf '%s\n' "$entry" | awk "$AWK_PROG")"
+    if [ -z "$canonical" ]; then
+      invalid_wl+=("$entry")
+    else
+      printf '%s\n' "$canonical" >> "$WL_FILE"
+    fi
+  done
+  if [ "${#invalid_wl[@]}" -gt 0 ]; then
+    err "Erreur : entrée(s) WHITELIST invalide(s) :"
+    for entry in "${invalid_wl[@]}"; do
+      err "  - '$entry'"
+    done
+    exit 1
+  fi
+  # Dédup + tri
+  sort -u "$WL_FILE" -o "$WL_FILE"
+  wl_count="$(wc -l < "$WL_FILE")"
+  log "Whitelist : $(fmt_num "$wl_count") entrée(s)."
+fi
+
 cat "${TMP_DIR}"/src.* 2>/dev/null | sort -u > "$UNIQ_FILE" || true
 
 if [ ! -s "$UNIQ_FILE" ]; then
@@ -383,6 +498,14 @@ if [ "$DRY_RUN" -eq 1 ]; then
     removed="$(comm -23 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
     unchanged="$(comm -12 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
     log "Diff: +$(fmt_num "$added") ajoutées, -$(fmt_num "$removed") retirées, =$(fmt_num "$unchanged") inchangées"
+  fi
+  # Whitelist : annonce ce qui serait fait
+  if [ "${#WHITELIST[@]}" -gt 0 ]; then
+    log "[DRY-RUN] Whitelist : $(fmt_num "$(wc -l < "$WL_FILE")") entrée(s) seraient appliquées (set $WHITELIST_SET_NAME, règle ACCEPT)."
+  else
+    if ipset list -n 2>/dev/null | awk -v s="$WHITELIST_SET_NAME" '$0==s{found=1} END{exit(found?0:1)}'; then
+      log "[DRY-RUN] Whitelist vide : le set $WHITELIST_SET_NAME et la règle ACCEPT seraient retirés."
+    fi
   fi
   # Afficher le firewall détecté même en dry-run
   DETECTED_FW="$(detect_firewall)"
@@ -451,6 +574,32 @@ ipset destroy "$TEMP_SET"
 total="$(ipset list -t "$SET_NAME" | awk -F': ' '/Number of entries/{print $2}')"
 log "Total d'IP bloquées : $(fmt_num "$total")"
 
+# --- Whitelist : build/swap atomique si non vide ---
+WL_SET_EXISTS=0
+if ipset list -n 2>/dev/null | awk -v s="$WHITELIST_SET_NAME" '$0==s{found=1} END{exit(found?0:1)}'; then
+  WL_SET_EXISTS=1
+fi
+
+if [ "${#WHITELIST[@]}" -gt 0 ]; then
+  wl_entries="$(wc -l < "$WL_FILE")"
+  wl_maxelem=$(( wl_entries + 100 ))
+  [ "$wl_maxelem" -lt 256 ] && wl_maxelem=256
+  {
+    echo "create $WL_TEMP_SET $IPSET_TYPE family $IPSET_FAMILY hashsize 1024 maxelem $wl_maxelem"
+    awk -v set="$WL_TEMP_SET" '{print "add " set " " $1 " -exist"}' "$WL_FILE"
+  } > "$WL_TMP_FILE"
+
+  if [ "$WL_SET_EXISTS" -eq 0 ]; then
+    ipset create "$WHITELIST_SET_NAME" "$IPSET_TYPE" family "$IPSET_FAMILY" hashsize 1024 maxelem "$wl_maxelem"
+    WL_SET_EXISTS=1
+  fi
+  ipset destroy "$WL_TEMP_SET" 2>/dev/null || true
+  ipset restore < "$WL_TMP_FILE"
+  ipset swap "$WHITELIST_SET_NAME" "$WL_TEMP_SET"
+  ipset destroy "$WL_TEMP_SET"
+  log "Whitelist active : $(fmt_num "$wl_entries") entrée(s) dans $WHITELIST_SET_NAME."
+fi
+
 # --- Vérification / application des règles firewall ---
 DETECTED_FW="$(detect_firewall)"
 if [ "$DETECTED_FW" != "aucun" ]; then
@@ -463,4 +612,13 @@ if [ "$DETECTED_FW" != "aucun" ]; then
 else
   err "Aucun firewall détecté. Les IP sont dans le set ipset mais aucune règle de blocage n'est active."
   err "Lancez setup-firewall.sh pour installer un firewall, ou installez-en un manuellement."
+fi
+
+# --- Whitelist vide : détruire le set après que les règles aient été retirées ---
+if [ "${#WHITELIST[@]}" -eq 0 ] && [ "$WL_SET_EXISTS" -eq 1 ]; then
+  if ipset destroy "$WHITELIST_SET_NAME" 2>/dev/null; then
+    log "Whitelist vide : ipset $WHITELIST_SET_NAME détruit."
+  else
+    err "Avertissement : impossible de détruire $WHITELIST_SET_NAME (encore référencé ?)."
+  fi
 fi

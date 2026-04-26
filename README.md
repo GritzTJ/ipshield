@@ -28,6 +28,8 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 - **Détection automatique** du firewall actif
 - Application **idempotente** des règles LOG + DROP
 - **Support Docker** : protection automatique de la chaîne `DOCKER-USER` (conteneurs exposés)
+- **Whitelist** : IP/subnets toujours autorisés (ex: IP de management) via la variable `WHITELIST` en config
+- **Désinstallation propre** (`uninstall.sh`) avec mode dry-run et confirmation
 - **Seuil minimum** d'entrées (protection anti-purge)
 - Calcul **dynamique** de hashsize/maxelem
 - **Rapport de diff** : entrées ajoutées, retirées, inchangées
@@ -97,6 +99,7 @@ update-blocklist.sh [OPTIONS]
 | `update-blocklist.sh` | Mise à jour ipset + détection firewall + règles de blocage |
 | `setup-firewall.sh` | Installation interactive d'un firewall (one-shot) |
 | `lookup-ip.sh` | Recherche d'une IP dans les listes de blocage (diagnostic) |
+| `uninstall.sh` | Désinstallation propre (dry-run par défaut, `--apply` pour exécuter) |
 
 ### Sources de blocage
 
@@ -134,6 +137,8 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 - **Automatic detection** of the active firewall
 - **Idempotent** LOG + DROP rule application
 - **Docker support**: automatic `DOCKER-USER` chain protection (exposed containers)
+- **Whitelist**: always-allowed IPs/subnets (e.g. management IPs) via the `WHITELIST` config variable
+- **Clean uninstall** (`uninstall.sh`) with dry-run mode and confirmation
 - **Minimum threshold** of entries (anti-purge protection)
 - **Dynamic** hashsize/maxelem calculation
 - **Diff report**: added, removed, unchanged entries
@@ -203,6 +208,7 @@ update-blocklist.sh [OPTIONS]
 | `update-blocklist.sh` | ipset update + firewall detection + blocking rules |
 | `setup-firewall.sh` | Interactive firewall installation (one-shot) |
 | `lookup-ip.sh` | Look up an IP across blocklist sources (diagnostic) |
+| `uninstall.sh` | Clean uninstall (dry-run by default, `--apply` to execute) |
 
 ### Blocklist Sources
 

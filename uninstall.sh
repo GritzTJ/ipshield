@@ -233,14 +233,18 @@ for set in "$SET_NAME" "$WHITELIST_SET_NAME"; do
 done
 
 echo ""
-log "${PREFIX}--- Cron (info uniquement, jamais modifié) ---"
+log "${PREFIX}--- Cron ---"
 cron_files="$(grep -lE "update-blocklist\.sh" /etc/crontab /etc/cron.d/* /var/spool/cron/* /var/spool/cron/crontabs/* 2>/dev/null || true)"
 if [ -n "$cron_files" ]; then
-  echo "  Lignes cron détectées (à retirer manuellement) :"
+  echo "  Lignes cron détectées :"
   echo "$cron_files" | while read -r f; do
     echo "    --- $f ---"
     grep -nE "update-blocklist\.sh" "$f" | sed 's/^/      /'
   done
+  if [ "$APPLY" -eq 1 ]; then
+    echo "  → la crontab de root sera proposée à la suppression (prompt séparé)."
+    echo "  → /etc/crontab et /etc/cron.d/* ne sont jamais modifiés (à faire à la main)."
+  fi
 else
   echo "  Aucune ligne cron détectée."
 fi
@@ -305,6 +309,39 @@ for set in "$SET_NAME" "$WHITELIST_SET_NAME"; do
   fi
 done
 
+# --- Retrait optionnel des lignes cron ---
+if command -v crontab >/dev/null 2>&1; then
+  current_cron="$(crontab -l 2>/dev/null || true)"
+  ipshield_lines="$(printf '%s\n' "$current_cron" | grep -E "update-blocklist\.sh" || true)"
+  if [ -n "$ipshield_lines" ]; then
+    echo ""
+    log "Lignes cron ipshield trouvées dans la crontab de root :"
+    echo "$ipshield_lines" | sed 's/^/    /'
+    read -rp "Les retirer ? [oui/non] : " ans
+    case "${ans,,}" in
+      oui|yes|y|o)
+        new_cron="$(printf '%s\n' "$current_cron" | grep -vE "update-blocklist\.sh" || true)"
+        new_cron="${new_cron%$'\n'}"
+        if [ -z "$new_cron" ]; then
+          crontab -r 2>/dev/null || true
+          log "Crontab de root vidée."
+        else
+          printf '%s\n' "$new_cron" | crontab -
+          log "Crontab de root mise à jour (lignes ipshield retirées)."
+        fi
+        ;;
+      *) log "Lignes cron conservées." ;;
+    esac
+  fi
+fi
+
+# Lignes cron dans /etc/crontab et /etc/cron.d/* (info uniquement, jamais modifié)
+other_cron="$(grep -lE "update-blocklist\.sh" /etc/crontab /etc/cron.d/* 2>/dev/null || true)"
+if [ -n "$other_cron" ]; then
+  echo ""
+  log "Lignes cron ipshield aussi présentes dans (à retirer manuellement) :"
+  echo "$other_cron" | sed 's/^/    /'
+fi
+
 echo ""
 log "Désinstallation terminée."
-log "Pensez à retirer manuellement les lignes cron référencées plus haut (le cas échéant)."

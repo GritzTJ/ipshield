@@ -80,6 +80,117 @@ detect_firewall() {
 
 DETECTED="$(detect_firewall)"
 
+# --- Configuration du cron (prompt interactif idempotent) ---
+configure_cron() {
+  echo ""
+  read -rp "Configurer le cron ipshield maintenant ? [oui/non] : " ans
+  case "${ans,,}" in
+    oui|yes|y|o) ;;
+    *)
+      log "Cron non configuré. Pour le faire plus tard, relancez ./setup-firewall.sh."
+      return 0 ;;
+  esac
+
+  # Vérification crontab disponible
+  if ! command -v crontab >/dev/null 2>&1; then
+    err "commande 'crontab' non disponible — installation cron à faire manuellement."
+    return 0
+  fi
+
+  # Chemin par défaut : crontab existante > même répertoire que ce script
+  local script_dir script_path log_path mailto reboot_delay existing_path
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  script_path="$script_dir/update-blocklist.sh"
+  existing_path="$(crontab -l 2>/dev/null | awk '
+    /update-blocklist\.sh/ {
+      for (i=1; i<=NF; i++) if ($i ~ /update-blocklist\.sh$/) { print $i; exit }
+    }')"
+  [ -n "$existing_path" ] && script_path="$existing_path"
+
+  read -rp "Chemin de update-blocklist.sh [$script_path] : " ans
+  [ -n "$ans" ] && script_path="$ans"
+  if [ ! -x "$script_path" ]; then
+    err "$script_path n'existe pas ou n'est pas exécutable. Cron non configuré."
+    return 0
+  fi
+
+  log_path="/var/log/update-blocklist.log"
+  read -rp "Fichier de log [$log_path] : " ans
+  [ -n "$ans" ] && log_path="$ans"
+
+  read -rp "Email pour notification d'erreurs (vide = pas de MAILTO) : " mailto
+  if [ -n "$mailto" ] && ! [[ "$mailto" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+    err "Adresse email invalide. Cron non configuré."
+    return 0
+  fi
+
+  reboot_delay=60
+  read -rp "Délai @reboot en secondes (laisse Docker démarrer) [$reboot_delay] : " ans
+  if [ -n "$ans" ]; then
+    if ! [[ "$ans" =~ ^[0-9]+$ ]]; then
+      err "Délai invalide. Cron non configuré."
+      return 0
+    fi
+    reboot_delay="$ans"
+  fi
+
+  # Lecture crontab actuel
+  local current_cron filtered_cron new_lines new_cron
+  current_cron="$(crontab -l 2>/dev/null || true)"
+
+  # Filtre les lignes ipshield existantes (par basename) + MAILTO si on en pose un nouveau
+  local script_basename mailto_drop
+  script_basename="$(basename "$script_path")"
+  mailto_drop=0
+  [ -n "$mailto" ] && mailto_drop=1
+
+  filtered_cron="$(printf '%s\n' "$current_cron" | awk -v base="$script_basename" -v drop_mailto="$mailto_drop" '
+    index($0, base) { next }
+    drop_mailto && /^[[:space:]]*MAILTO=/ { next }
+    { print }
+  ')"
+  filtered_cron="${filtered_cron%$'\n'}"
+
+  # Nouvelles lignes
+  new_lines=""
+  [ -n "$mailto" ] && new_lines+="MAILTO=$mailto"$'\n'
+  new_lines+="0 */12 * * * $script_path >> $log_path 2>&1"$'\n'
+  if [ "$reboot_delay" -gt 0 ]; then
+    new_lines+="@reboot sleep $reboot_delay && $script_path >> $log_path 2>&1"
+  else
+    new_lines+="@reboot $script_path >> $log_path 2>&1"
+  fi
+
+  # Concaténation
+  if [ -n "$filtered_cron" ]; then
+    new_cron="${filtered_cron}"$'\n'"${new_lines}"
+  else
+    new_cron="$new_lines"
+  fi
+
+  echo ""
+  echo "=== Crontab actuelle (root) ==="
+  if [ -z "$current_cron" ]; then echo "(vide)"; else echo "$current_cron"; fi
+  echo ""
+  echo "=== Crontab après modification ==="
+  echo "$new_cron"
+  echo ""
+
+  if [ "$current_cron" = "$new_cron" ]; then
+    log "Aucun changement nécessaire."
+    return 0
+  fi
+
+  read -rp "Appliquer ? [oui/non] : " ans
+  case "${ans,,}" in
+    oui|yes|y|o) ;;
+    *) log "Cron non modifié."; return 0 ;;
+  esac
+
+  printf '%s\n' "$new_cron" | crontab -
+  log "Crontab mise à jour."
+}
+
 # --- Affichage résultat détection ---
 echo ""
 if [ "$DETECTED" = "aucun" ]; then
@@ -124,7 +235,8 @@ esac
 # --- Vérifier si déjà actif ---
 if [ "$FIREWALL" = "$DETECTED" ]; then
   echo ""
-  log "$FIREWALL est déjà actif sur ce système. Rien à faire."
+  log "$FIREWALL est déjà actif sur ce système (pas de transition nécessaire)."
+  configure_cron
   exit 0
 fi
 
@@ -389,4 +501,8 @@ trap - EXIT INT TERM
 
 echo ""
 log "$FIREWALL installé et activé avec succès."
-log "Lancez update-blocklist.sh pour télécharger les IP et appliquer les règles de blocage."
+
+configure_cron
+
+echo ""
+log "Lancez maintenant update-blocklist.sh pour la première mise à jour ; le cron prendra le relais ensuite."

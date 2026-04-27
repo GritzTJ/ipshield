@@ -77,9 +77,13 @@ Le script `setup-firewall.sh` détecte, installe et active un firewall sur le sy
 Le script :
 1. Détecte le firewall actif (firewalld, ufw, nftables ou iptables)
 2. Propose un menu avec les 4 options
-3. Détecte automatiquement le port SSH et propose de l'ouvrir avant activation (protection anti-lockout)
+3. Détecte automatiquement les ports TCP en écoute (non-loopback) et propose de les ouvrir avant activation (protection anti-lockout)
 4. Désactive l'ancien firewall si un autre est choisi (avec rollback automatique en cas d'échec)
 5. Installe et active le nouveau firewall
+6. Vérifie que le firewall répond après activation (sinon rollback)
+7. **Propose de configurer la crontab ipshield** : chemin du script, fichier de log, MAILTO optionnel, délai au `@reboot`. Idempotent (relance possible pour modifier).
+
+> Si le firewall choisi est déjà actif (pas de transition), `setup-firewall.sh` saute directement à l'étape 7.
 
 ### Étape 2 : Lancer le blocage (première exécution)
 
@@ -158,7 +162,7 @@ iptables -S INPUT | grep blacklist-allow
 ./uninstall.sh --apply
 ```
 
-Le script affiche aussi les lignes cron référençant `update-blocklist.sh`, à retirer manuellement (`crontab -e`).
+En mode `--apply`, après suppression des règles et ipsets, un prompt séparé propose de retirer les lignes cron ipshield de la crontab de root (le reste est préservé). Les entrées dans `/etc/crontab` ou `/etc/cron.d/*` sont seulement listées (à retirer manuellement).
 
 ## Support Docker
 
@@ -180,22 +184,35 @@ iptables -L DOCKER-USER -n
 
 Les règles LOG + DROP avec `match-set blacklist src` doivent apparaître.
 
-## Automatisation
+## Automatisation (cron)
 
-Exécution toutes les 12 heures et au démarrage :
+`setup-firewall.sh` propose la configuration de la crontab à la fin de son exécution (étape 7). C'est la méthode recommandée — elle est idempotente, détecte le chemin existant et préserve le reste de la crontab.
+
+Pour reconfigurer la crontab plus tard sans toucher au firewall : relancer `./setup-firewall.sh` et choisir le firewall déjà actif.
+
+Le script applique le schedule par défaut suivant :
+
+```
+0 */12 * * * /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+@reboot sleep 60 && /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+```
+
+- `sleep 60` au `@reboot` : laisse le temps à Docker de démarrer avant que le script cherche la chaîne `DOCKER-USER` (ajustable via le prompt).
+- `MAILTO=...` ajouté en haut si une adresse email est fournie : cron envoie un mail à chaque erreur (sortie sur stderr).
+
+### Configuration manuelle (alternative)
+
+Si vous préférez gérer la crontab à la main :
 
 ```bash
 crontab -e
 ```
 
-Ajouter les lignes suivantes :
-
 ```
-0 */12 * * * /chemin/vers/ipshield/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
-@reboot sleep 30 && /chemin/vers/ipshield/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+MAILTO=admin@exemple.fr
+0 */12 * * * /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+@reboot sleep 60 && /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
 ```
-
-> Remplacer `/chemin/vers/ipshield/` par le chemin absolu du répertoire d'installation.
 
 ## Logs
 

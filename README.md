@@ -30,7 +30,8 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 - **Support Docker** : protection automatique de la chaîne `DOCKER-USER` (conteneurs exposés)
 - **Whitelist** : IP/subnets toujours autorisés (ex: IP de management) via la variable `WHITELIST` en config
 - **Cron auto** : `setup-firewall.sh` propose la configuration du crontab (idempotent, MAILTO optionnel, sleep `@reboot` configurable)
-- **Désinstallation propre** (`uninstall.sh`) avec mode dry-run, confirmation, et retrait optionnel du crontab
+- **Logs auto** : `setup-firewall.sh` propose aussi l'installation du filtre rsyslog (`BLOCKED:` → `/var/log/blocked-ips.log`) et des configs logrotate
+- **Désinstallation propre** (`uninstall.sh`) avec mode dry-run, confirmation, et retrait optionnel du crontab et des configs logs
 - **Seuil minimum** d'entrées (protection anti-purge)
 - Calcul **dynamique** de hashsize/maxelem
 - **Rapport de diff** : entrées ajoutées, retirées, inchangées
@@ -140,7 +141,8 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 - **Docker support**: automatic `DOCKER-USER` chain protection (exposed containers)
 - **Whitelist**: always-allowed IPs/subnets (e.g. management IPs) via the `WHITELIST` config variable
 - **Cron setup**: `setup-firewall.sh` offers crontab configuration (idempotent, optional MAILTO, configurable `@reboot` sleep)
-- **Clean uninstall** (`uninstall.sh`) with dry-run, confirmation, and optional crontab removal
+- **Logging setup**: `setup-firewall.sh` also offers rsyslog filter (`BLOCKED:` → `/var/log/blocked-ips.log`) and logrotate configs
+- **Clean uninstall** (`uninstall.sh`) with dry-run, confirmation, and optional removal of crontab and logging configs
 - **Minimum threshold** of entries (anti-purge protection)
 - **Dynamic** hashsize/maxelem calculation
 - **Diff report**: added, removed, unchanged entries

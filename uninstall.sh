@@ -234,6 +234,22 @@ for set in "$SET_NAME" "$WHITELIST_SET_NAME"; do
 done
 
 echo ""
+log "${PREFIX}--- Configs rsyslog + logrotate ---"
+log_configs_list=(/etc/rsyslog.d/30-blocked-ips.conf /etc/logrotate.d/update-blocklist /etc/logrotate.d/blocked-ips)
+log_configs_found=0
+for f in "${log_configs_list[@]}"; do
+  if [ -f "$f" ]; then
+    echo "  $f"
+    log_configs_found=1
+  fi
+done
+if [ "$log_configs_found" -eq 0 ]; then
+  echo "  (aucune)"
+elif [ "$APPLY" -eq 1 ]; then
+  echo "  → un prompt séparé proposera de les retirer."
+fi
+
+echo ""
 log "${PREFIX}--- Cron ---"
 cron_files="$(grep -lE "update-blocklist\.sh" /etc/crontab /etc/cron.d/* /var/spool/cron/* /var/spool/cron/crontabs/* 2>/dev/null || true)"
 if [ -n "$cron_files" ]; then
@@ -342,6 +358,43 @@ if [ -n "$other_cron" ]; then
   echo ""
   log "Lignes cron ipshield aussi présentes dans (à retirer manuellement) :"
   echo "$other_cron" | sed 's/^/    /'
+fi
+
+# --- Retrait optionnel des configs rsyslog + logrotate ---
+log_configs=(/etc/rsyslog.d/30-blocked-ips.conf /etc/logrotate.d/update-blocklist /etc/logrotate.d/blocked-ips)
+present_log_configs=()
+for f in "${log_configs[@]}"; do
+  [ -f "$f" ] && present_log_configs+=("$f")
+done
+if [ "${#present_log_configs[@]}" -gt 0 ]; then
+  echo ""
+  log "Configs rsyslog + logrotate ipshield trouvées :"
+  for f in "${present_log_configs[@]}"; do
+    echo "    $f"
+  done
+  read -rp "Les retirer ? [oui/non] : " ans
+  case "${ans,,}" in
+    oui|yes|y|o)
+      restart_rsyslog=0
+      for f in "${present_log_configs[@]}"; do
+        if rm -f "$f" 2>/dev/null; then
+          log "  $f supprimé."
+          [[ "$f" == /etc/rsyslog.d/* ]] && restart_rsyslog=1
+        else
+          err "  Impossible de retirer $f."
+        fi
+      done
+      if [ "$restart_rsyslog" -eq 1 ]; then
+        if systemctl restart rsyslog 2>/dev/null; then
+          log "rsyslog redémarré."
+        else
+          err "Impossible de redémarrer rsyslog."
+        fi
+      fi
+      log "Note : les fichiers de log /var/log/update-blocklist.log et /var/log/blocked-ips.log sont conservés."
+      ;;
+    *) log "Configs conservées." ;;
+  esac
 fi
 
 echo ""

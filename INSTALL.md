@@ -84,8 +84,9 @@ Le script :
 5. Installe et active le nouveau firewall
 6. Vérifie que le firewall répond après activation (sinon rollback)
 7. **Propose de configurer le crontab ipshield** : chemin du script, fichier de log, MAILTO optionnel, délai au `@reboot`. Idempotent (relance possible pour modifier).
+8. **Propose d'installer le filtre rsyslog + logrotate** : `30-blocked-ips.conf` pour rediriger les `BLOCKED:` vers `/var/log/blocked-ips.log`, et deux configs logrotate (rotate 4 weekly). Idempotent (compare le contenu, ne ré-écrit que si différent ou absent).
 
-> Si le firewall choisi est déjà actif (pas de transition), `setup-firewall.sh` saute directement à l'étape 7.
+> Si le firewall choisi est déjà actif (pas de transition), `setup-firewall.sh` saute directement aux étapes 7 et 8.
 
 ### Étape 2 : Lancer le blocage (première exécution)
 
@@ -164,7 +165,11 @@ iptables -S INPUT | grep blacklist-allow
 ./uninstall.sh --apply
 ```
 
-En mode `--apply`, après suppression des règles et ipsets, un prompt séparé propose de retirer les lignes cron ipshield du crontab de root (le reste est préservé). Les entrées dans `/etc/crontab` ou `/etc/cron.d/*` sont seulement listées (à retirer manuellement).
+En mode `--apply`, après suppression des règles et ipsets, deux prompts séparés proposent de retirer :
+1. les lignes cron ipshield du crontab de root (le reste est préservé) ;
+2. les configs `/etc/rsyslog.d/30-blocked-ips.conf` et `/etc/logrotate.d/{update-blocklist,blocked-ips}` (rsyslog est redémarré si le filtre est retiré).
+
+Les entrées dans `/etc/crontab` ou `/etc/cron.d/*` sont seulement listées (à retirer manuellement). Les fichiers de log eux-mêmes (`/var/log/update-blocklist.log`, `/var/log/blocked-ips.log`) sont conservés.
 
 ## Support Docker
 
@@ -217,6 +222,8 @@ MAILTO=admin@exemple.fr
 ```
 
 ## Logs
+
+> **Installation recommandée** : `setup-firewall.sh` propose à la fin (étape 8) d'installer automatiquement le filtre rsyslog et les deux configs logrotate. Idempotent (rejouer ne ré-écrit que si différent). Les sections ci-dessous sont la procédure manuelle équivalente, à utiliser si tu préfères tout faire à la main.
 
 ### Logrotate du script
 

@@ -191,6 +191,102 @@ configure_cron() {
   log "Crontab mis à jour."
 }
 
+# --- Helper : installe ou met à jour un fichier de config ---
+# Args: chemin, contenu attendu, description courte
+# Retour : 0 si modifié, 1 si pas de changement
+_install_config() {
+  local path="$1"
+  local content="$2"
+  local desc="$3"
+
+  if [ -f "$path" ]; then
+    if [ "$(cat "$path")" = "$content" ]; then
+      log "  $desc : déjà à jour ($path)"
+      return 1
+    fi
+    log "  $desc : contenu différent ($path)"
+    local ans
+    read -rp "  Écraser ? [oui/non] : " ans
+    case "${ans,,}" in
+      oui|yes|y|o) ;;
+      *) log "  Conservé tel quel."; return 1 ;;
+    esac
+  fi
+  printf '%s\n' "$content" > "$path"
+  chmod 644 "$path"
+  log "  $desc : installé ($path)"
+  return 0
+}
+
+# --- Configuration des logs (rsyslog filter + logrotate) ---
+configure_logs() {
+  echo ""
+  local ans
+  read -rp "Configurer rsyslog + logrotate pour les logs ipshield ? [oui/non] : " ans
+  case "${ans,,}" in
+    oui|yes|y|o) ;;
+    *)
+      log "Logs non configurés. Pour le faire plus tard, relancez ./setup-firewall.sh."
+      return 0 ;;
+  esac
+
+  local has_rsyslog=0
+  if systemctl is-active --quiet rsyslog 2>/dev/null; then
+    has_rsyslog=1
+  else
+    err "rsyslog n'est pas actif — le filtre ne sera pas installé. Logrotate sera tout de même proposé."
+  fi
+
+  # Contenus attendus (alignés avec INSTALL.md)
+  local rsyslog_content
+  rsyslog_content='template(name="blockedFormat" type="string"
+  string="%timestamp:::date-year%-%timestamp:::date-month%-%timestamp:::date-day% %timestamp:::date-hour%:%timestamp:::date-minute%:%timestamp:::date-second% %msg%\n")
+
+:msg, contains, "BLOCKED: " /var/log/blocked-ips.log;blockedFormat
+& stop'
+
+  local logrotate_app_content
+  logrotate_app_content='/var/log/update-blocklist.log {
+	rotate 4
+	weekly
+	missingok
+	notifempty
+	compress
+	delaycompress
+}'
+
+  local logrotate_blocked_content
+  logrotate_blocked_content='/var/log/blocked-ips.log {
+	rotate 4
+	weekly
+	missingok
+	notifempty
+	compress
+	delaycompress
+	postrotate
+		/usr/lib/rsyslog/rsyslog-rotate
+	endscript
+}'
+
+  local need_rsyslog_restart=0
+
+  if [ "$has_rsyslog" -eq 1 ]; then
+    if _install_config /etc/rsyslog.d/30-blocked-ips.conf "$rsyslog_content" "Filtre rsyslog"; then
+      need_rsyslog_restart=1
+    fi
+  fi
+  _install_config /etc/logrotate.d/update-blocklist "$logrotate_app_content" "Logrotate update-blocklist" || true
+  _install_config /etc/logrotate.d/blocked-ips "$logrotate_blocked_content" "Logrotate blocked-ips" || true
+
+  if [ "$need_rsyslog_restart" -eq 1 ]; then
+    if systemctl restart rsyslog 2>/dev/null; then
+      log "rsyslog redémarré."
+    else
+      err "Impossible de redémarrer rsyslog. Faites-le manuellement (systemctl restart rsyslog)."
+    fi
+  fi
+}
+
 # --- Affichage résultat détection ---
 echo ""
 if [ "$DETECTED" = "aucun" ]; then
@@ -237,6 +333,7 @@ if [ "$FIREWALL" = "$DETECTED" ]; then
   echo ""
   log "$FIREWALL est déjà actif sur ce système (pas de transition nécessaire)."
   configure_cron
+  configure_logs
   exit 0
 fi
 
@@ -503,6 +600,7 @@ echo ""
 log "$FIREWALL installé et activé avec succès."
 
 configure_cron
+configure_logs
 
 echo ""
 log "Lancez maintenant update-blocklist.sh pour la première mise à jour ; le cron prendra le relais ensuite."

@@ -29,8 +29,8 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 - Application **idempotente** des règles LOG + DROP
 - **Support Docker** : protection automatique de la chaîne `DOCKER-USER` (conteneurs exposés)
 - **Whitelist** : IP/subnets toujours autorisés (ex: IP de management) via la variable `WHITELIST` en config
-- **Cron auto** : `setup-firewall.sh` propose la configuration de la crontab (idempotent, MAILTO optionnel, sleep `@reboot` configurable)
-- **Désinstallation propre** (`uninstall.sh`) avec mode dry-run, confirmation, et retrait optionnel de la crontab
+- **Cron auto** : `setup-firewall.sh` propose la configuration du crontab (idempotent, MAILTO optionnel, sleep `@reboot` configurable)
+- **Désinstallation propre** (`uninstall.sh`) avec mode dry-run, confirmation, et retrait optionnel du crontab
 - **Seuil minimum** d'entrées (protection anti-purge)
 - Calcul **dynamique** de hashsize/maxelem
 - **Rapport de diff** : entrées ajoutées, retirées, inchangées

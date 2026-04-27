@@ -242,7 +242,7 @@ if [ -n "$cron_files" ]; then
     grep -nE "update-blocklist\.sh" "$f" | sed 's/^/      /'
   done
   if [ "$APPLY" -eq 1 ]; then
-    echo "  → la crontab de root sera proposée à la suppression (prompt séparé)."
+    echo "  → le crontab de root sera proposé à la suppression (prompt séparé)."
     echo "  → /etc/crontab et /etc/cron.d/* ne sont jamais modifiés (à faire à la main)."
   fi
 else
@@ -315,7 +315,7 @@ if command -v crontab >/dev/null 2>&1; then
   ipshield_lines="$(printf '%s\n' "$current_cron" | grep -E "update-blocklist\.sh" || true)"
   if [ -n "$ipshield_lines" ]; then
     echo ""
-    log "Lignes cron ipshield trouvées dans la crontab de root :"
+    log "Lignes cron ipshield trouvées dans le crontab de root :"
     echo "$ipshield_lines" | sed 's/^/    /'
     read -rp "Les retirer ? [oui/non] : " ans
     case "${ans,,}" in
@@ -324,10 +324,10 @@ if command -v crontab >/dev/null 2>&1; then
         new_cron="${new_cron%$'\n'}"
         if [ -z "$new_cron" ]; then
           crontab -r 2>/dev/null || true
-          log "Crontab de root vidée."
+          log "Crontab de root vidé."
         else
           printf '%s\n' "$new_cron" | crontab -
-          log "Crontab de root mise à jour (lignes ipshield retirées)."
+          log "Crontab de root mis à jour (lignes ipshield retirées)."
         fi
         ;;
       *) log "Lignes cron conservées." ;;

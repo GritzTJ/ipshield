@@ -169,7 +169,7 @@ configure_cron() {
   fi
 
   echo ""
-  echo "=== Crontab actuelle (root) ==="
+  echo "=== Crontab actuel (root) ==="
   if [ -z "$current_cron" ]; then echo "(vide)"; else echo "$current_cron"; fi
   echo ""
   echo "=== Crontab après modification ==="
@@ -188,7 +188,7 @@ configure_cron() {
   esac
 
   printf '%s\n' "$new_cron" | crontab -
-  log "Crontab mise à jour."
+  log "Crontab mis à jour."
 }
 
 # --- Affichage résultat détection ---

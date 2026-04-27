@@ -81,7 +81,7 @@ Le script :
 4. Désactive l'ancien firewall si un autre est choisi (avec rollback automatique en cas d'échec)
 5. Installe et active le nouveau firewall
 6. Vérifie que le firewall répond après activation (sinon rollback)
-7. **Propose de configurer la crontab ipshield** : chemin du script, fichier de log, MAILTO optionnel, délai au `@reboot`. Idempotent (relance possible pour modifier).
+7. **Propose de configurer le crontab ipshield** : chemin du script, fichier de log, MAILTO optionnel, délai au `@reboot`. Idempotent (relance possible pour modifier).
 
 > Si le firewall choisi est déjà actif (pas de transition), `setup-firewall.sh` saute directement à l'étape 7.
 
@@ -162,7 +162,7 @@ iptables -S INPUT | grep blacklist-allow
 ./uninstall.sh --apply
 ```
 
-En mode `--apply`, après suppression des règles et ipsets, un prompt séparé propose de retirer les lignes cron ipshield de la crontab de root (le reste est préservé). Les entrées dans `/etc/crontab` ou `/etc/cron.d/*` sont seulement listées (à retirer manuellement).
+En mode `--apply`, après suppression des règles et ipsets, un prompt séparé propose de retirer les lignes cron ipshield du crontab de root (le reste est préservé). Les entrées dans `/etc/crontab` ou `/etc/cron.d/*` sont seulement listées (à retirer manuellement).
 
 ## Support Docker
 
@@ -186,9 +186,9 @@ Les règles LOG + DROP avec `match-set blacklist src` doivent apparaître.
 
 ## Automatisation (cron)
 
-`setup-firewall.sh` propose la configuration de la crontab à la fin de son exécution (étape 7). C'est la méthode recommandée — elle est idempotente, détecte le chemin existant et préserve le reste de la crontab.
+`setup-firewall.sh` propose la configuration du crontab à la fin de son exécution (étape 7). C'est la méthode recommandée — elle est idempotente, détecte le chemin existant et préserve le reste du crontab.
 
-Pour reconfigurer la crontab plus tard sans toucher au firewall : relancer `./setup-firewall.sh` et choisir le firewall déjà actif.
+Pour reconfigurer le crontab plus tard sans toucher au firewall : relancer `./setup-firewall.sh` et choisir le firewall déjà actif.
 
 Le script applique le schedule par défaut suivant :
 
@@ -202,7 +202,7 @@ Le script applique le schedule par défaut suivant :
 
 ### Configuration manuelle (alternative)
 
-Si vous préférez gérer la crontab à la main :
+Si vous préférez gérer le crontab à la main :
 
 ```bash
 crontab -e

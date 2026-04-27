@@ -49,6 +49,8 @@ Par défaut, le script fonctionne sans fichier de configuration. Les variables p
 | `MIN_ENTRIES` | `1000` | Seuil minimum d'entrées (protection anti-purge) |
 | `BASE_HASHSIZE` | `16384` | Hashsize de base pour ipset |
 | `BASE_MAXELEM` | `300000` | Maxelem de base pour ipset |
+| `LOG_LIMIT` | `60/min` | Rate-limit du logging des paquets bloqués (`N/sec`, `N/min`, `N/hour`, `N/day` ; vide = pas de limite) |
+| `LOG_BURST` | `100` | Burst maximum avant que `LOG_LIMIT` s'applique |
 
 ### Sources par défaut
 
@@ -234,6 +236,15 @@ EOF
 ```
 
 ### Logs des IP bloquées
+
+Par défaut, le logging est **rate-limité** à **60 logs/min avec burst 100** (`LOG_LIMIT="60/min"`, `LOG_BURST=100`). Sous attaque massive, tous les paquets sont **bloqués** mais seul un échantillon apparaît dans les logs — pour éviter de saturer `/var/log/`.
+
+Pour ajuster :
+- `LOG_LIMIT="600/min"` + `LOG_BURST=1000` : plus de visibilité, plus de risque de flood
+- `LOG_LIMIT=""` (vide) : pas de rate-limit, loggue **tout** (risque réel sous attaque)
+- voir `update-blocklist.conf.example` pour les détails
+
+Pour iptables/nftables/DOCKER-USER, le drift est détecté automatiquement : changer `LOG_LIMIT` et lancer `update-blocklist.sh` met à jour les règles. Pour **ufw** (via `/etc/ufw/before.rules`) et **firewalld** (via `--direct`), un changement de valeur nécessite `./uninstall.sh --apply` puis ré-exécution de `update-blocklist.sh`.
 
 Les règles appliquées par `update-blocklist.sh` utilisent toutes le préfixe `BLOCKED: ` dans leurs logs, quel que soit le firewall :
 

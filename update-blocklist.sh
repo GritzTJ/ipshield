@@ -59,6 +59,8 @@ VERBOSE=0
 MIN_ENTRIES=1000
 BASE_HASHSIZE="16384"
 BASE_MAXELEM="300000"
+LOG_LIMIT="60/min"
+LOG_BURST=100
 
 # --- Source config file (si existe) ---
 if [ -f "$CONF_FILE" ]; then
@@ -99,6 +101,19 @@ fi
 if [ "$WHITELIST_SET_NAME" = "$SET_NAME" ]; then
   echo "Erreur : WHITELIST_SET_NAME ne doit pas être identique à SET_NAME." >&2
   exit 1
+fi
+
+# --- Validation LOG_LIMIT / LOG_BURST ---
+# LOG_LIMIT vide = loggue tout (pas de rate-limit)
+if [ -n "$LOG_LIMIT" ]; then
+  if ! [[ "$LOG_LIMIT" =~ ^[0-9]+/(sec|second|min|minute|hour|day)$ ]]; then
+    echo "Erreur : LOG_LIMIT invalide ('$LOG_LIMIT'). Format attendu : N/(sec|min|hour|day) ou vide." >&2
+    exit 1
+  fi
+  if ! [[ "$LOG_BURST" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Erreur : LOG_BURST invalide ('$LOG_BURST'). Entier positif attendu." >&2
+    exit 1
+  fi
 fi
 
 # --- Variables dérivées ---
@@ -175,22 +190,65 @@ detect_docker() {
   iptables -L DOCKER-USER -n >/dev/null 2>&1
 }
 
-# --- Insertion idempotente des règles LOG + DROP sur une chaîne iptables ---
+# --- Construit le tableau d'arguments iptables pour la règle LOG (selon LOG_LIMIT) ---
+_log_rule_args() {
+  local args=( -m set --match-set "$SET_NAME" src )
+  if [ -n "$LOG_LIMIT" ]; then
+    args+=( -m limit --limit "$LOG_LIMIT" --limit-burst "$LOG_BURST" )
+  fi
+  args+=( -j LOG --log-prefix "BLOCKED: " --log-level 4 )
+  printf '%s\n' "${args[@]}"
+}
+
+# --- Retire toutes les règles LOG ipshield existantes sur une chaîne (n'importe quelles valeurs de limit) ---
+_remove_old_log_rules() {
+  local chain="$1"
+  local rule
+  while true; do
+    rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A $chain .*--match-set $SET_NAME src.*-j LOG --log-prefix \"BLOCKED: \"" | head -1)"
+    [ -z "$rule" ] && break
+    rule="${rule/#-A /-D }"
+    eval "iptables $rule"
+  done
+}
+
+# --- Insertion/maj idempotente des règles LOG + DROP sur une chaîne iptables ---
+# Détecte le drift sur les paramètres LOG (LOG_LIMIT/LOG_BURST) et resynchronise.
 _apply_iptables_rules() {
   local chain="$1"
-  iptables -C "$chain" -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null || {
-    iptables -I "$chain" -m set --match-set "$SET_NAME" src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+  local actioned=0
+  local log_args
+  mapfile -t log_args < <(_log_rule_args)
+
+  # LOG : vérifier si la règle exacte (avec les valeurs actuelles) existe
+  if ! iptables -C "$chain" "${log_args[@]}" 2>/dev/null; then
+    _remove_old_log_rules "$chain"
+    iptables -I "$chain" 1 "${log_args[@]}"
+    actioned=1
+  fi
+
+  # DROP : vérifier et insérer après LOG (pos 2)
+  if ! iptables -C "$chain" -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
     iptables -I "$chain" 2 -m set --match-set "$SET_NAME" src -j DROP
-    return 0
-  }
-  return 1
+    actioned=1
+  fi
+
+  [ "$actioned" -eq 1 ] && return 0 || return 1
 }
 
 # --- Insertion idempotente de la règle ACCEPT whitelist en position 1 ---
+# Vérifie qu'elle est bien la première règle ; sinon retire et ré-insère.
 _apply_whitelist_iptables() {
   local chain="$1"
-  iptables -C "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null || \
-    iptables -I "$chain" 1 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
+  local first_rule
+  first_rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A" | head -1)"
+  if echo "$first_rule" | grep -qE -- "--match-set $WHITELIST_SET_NAME src .*-j ACCEPT$"; then
+    return
+  fi
+  while iptables -C "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; do
+    iptables -D "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
+  done
+  iptables -I "$chain" 1 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
 }
 
 # --- Suppression des règles ACCEPT whitelist (toutes occurrences) ---
@@ -261,8 +319,15 @@ apply_firewall_rules() {
 
     firewalld)
       local need_reload=0
+      # Construction des args LOG selon LOG_LIMIT
+      local fw_log_args=( -m set --match-set "$SET_NAME" src )
+      if [ -n "$LOG_LIMIT" ]; then
+        fw_log_args+=( -m limit --limit "$LOG_LIMIT" --limit-burst "$LOG_BURST" )
+      fi
+      fw_log_args+=( -j LOG --log-prefix "BLOCKED: " --log-level 4 )
+
       if ! firewall-cmd --permanent --direct --query-rule ipv4 filter INPUT 1 -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
-        firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 -m set --match-set "$SET_NAME" src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+        firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 "${fw_log_args[@]}"
         firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -m set --match-set "$SET_NAME" src -j DROP
         need_reload=1
         log "Règles firewalld ajoutées (LOG + DROP)."
@@ -270,7 +335,7 @@ apply_firewall_rules() {
       _whitelist_or_cleanup_firewalld INPUT && need_reload=1
       if detect_docker; then
         if ! firewall-cmd --permanent --direct --query-rule ipv4 filter DOCKER-USER 1 -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
-          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 0 -m set --match-set "$SET_NAME" src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 0 "${fw_log_args[@]}"
           firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 1 -m set --match-set "$SET_NAME" src -j DROP
           need_reload=1
           log "Règles firewalld DOCKER-USER ajoutées (LOG + DROP)."
@@ -285,9 +350,16 @@ apply_firewall_rules() {
       if ! grep -q "match-set $SET_NAME src" /etc/ufw/before.rules 2>/dev/null; then
         # Sauvegarde avant modification (protection contre corruption par sed)
         cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
+        # Construction de la ligne LOG selon LOG_LIMIT
+        local ufw_log_line
+        if [ -n "$LOG_LIMIT" ]; then
+          ufw_log_line="-A ufw-before-input -m set --match-set $SET_NAME src -m limit --limit $LOG_LIMIT --limit-burst $LOG_BURST -j LOG --log-prefix \"BLOCKED: \" --log-level 4"
+        else
+          ufw_log_line="-A ufw-before-input -m set --match-set $SET_NAME src -j LOG --log-prefix \"BLOCKED: \" --log-level 4"
+        fi
         sed -i "/*filter/,/COMMIT/ {
           /COMMIT/ i\\
--A ufw-before-input -m set --match-set $SET_NAME src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix \"BLOCKED: \" --log-level 4\\
+$ufw_log_line\\
 -A ufw-before-input -m set --match-set $SET_NAME src -j DROP
         }" /etc/ufw/before.rules
         ufw reload

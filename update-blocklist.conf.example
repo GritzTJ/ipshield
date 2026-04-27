@@ -45,3 +45,16 @@
 # Le script ajuste dynamiquement si le nombre d'entrees depasse ces valeurs.
 #BASE_HASHSIZE=16384
 #BASE_MAXELEM=300000
+
+# --- Rate-limit du logging des paquets bloques ---
+# LOG_LIMIT : taux maximum de logs ("N/sec", "N/min", "N/hour", "N/day").
+#             Vide = pas de rate-limit (loggue tout). Risque de saturer
+#             /var/log sous attaque massive.
+# LOG_BURST : nombre max de logs en burst avant que le rate-limit s'applique.
+#             Doit etre un entier positif si LOG_LIMIT est non vide.
+# Defauts : 60/min et 100 (sans risque de flood, perd des details sous attaque massive).
+# Drift : si tu modifies ces valeurs apres install, iptables/nftables/DOCKER-USER
+#         sont mis a jour automatiquement au prochain run. Pour ufw (before.rules)
+#         et firewalld (--direct), il faut uninstall.sh --apply puis ré-installer.
+#LOG_LIMIT="60/min"
+#LOG_BURST=100

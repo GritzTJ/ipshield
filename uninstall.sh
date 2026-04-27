@@ -135,26 +135,27 @@ remove_iptables_rules() {
   while iptables -C "$chain" -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; do
     iptables -D "$chain" -m set --match-set "$SET_NAME" src -j DROP
   done
-  # Blacklist LOG (avec rate-limit)
-  while iptables -C "$chain" -m set --match-set "$SET_NAME" src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4 2>/dev/null; do
-    iptables -D "$chain" -m set --match-set "$SET_NAME" src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+  # Blacklist LOG : suppression générique (n'importe quelles valeurs limit)
+  local rule
+  while true; do
+    rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A $chain .*--match-set $SET_NAME src.*-j LOG --log-prefix \"BLOCKED: \"" | head -1)"
+    [ -z "$rule" ] && break
+    rule="${rule/#-A /-D }"
+    eval "iptables $rule"
   done
 }
 
-# --- Suppression firewalld --direct ---
+# --- Suppression firewalld --direct (générique : matche n'importe quelles valeurs limit) ---
 remove_firewalld_rules() {
   local chain="$1"
   local changed=0
-  while firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; do
-    firewall-cmd --permanent --direct --remove-rule ipv4 filter "$chain" 0 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
-    changed=1
-  done
-  while firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 1 -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; do
-    firewall-cmd --permanent --direct --remove-rule ipv4 filter "$chain" 1 -m set --match-set "$SET_NAME" src -j DROP
-    changed=1
-  done
-  while firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 -m set --match-set "$SET_NAME" src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4 2>/dev/null; do
-    firewall-cmd --permanent --direct --remove-rule ipv4 filter "$chain" 0 -m set --match-set "$SET_NAME" src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+  local line
+  while true; do
+    line="$(firewall-cmd --permanent --direct --get-all-rules 2>/dev/null \
+      | grep -E "^ipv4 filter $chain .*--match-set ($SET_NAME|$WHITELIST_SET_NAME) src" \
+      | head -1)"
+    [ -z "$line" ] && break
+    eval "firewall-cmd --permanent --direct --remove-rule $line"
     changed=1
   done
   [ "$changed" -eq 1 ] && return 0 || return 1

@@ -138,7 +138,7 @@ remove_iptables_rules() {
   # Blacklist LOG : suppression générique (n'importe quelles valeurs limit)
   local rule
   while true; do
-    rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A $chain .*--match-set $SET_NAME src.*-j LOG --log-prefix \"BLOCKED: \"" | head -1)"
+    rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A $chain .*--match-set $SET_NAME src.*-j LOG --log-prefix \"BLOCKED: \"" | head -1 || true)"
     [ -z "$rule" ] && break
     rule="${rule/#-A /-D }"
     eval "iptables $rule"
@@ -153,7 +153,7 @@ remove_firewalld_rules() {
   while true; do
     line="$(firewall-cmd --permanent --direct --get-all-rules 2>/dev/null \
       | grep -E "^ipv4 filter $chain .*--match-set ($SET_NAME|$WHITELIST_SET_NAME) src" \
-      | head -1)"
+      | head -1 || true)"
     [ -z "$line" ] && break
     eval "firewall-cmd --permanent --direct --remove-rule $line"
     changed=1

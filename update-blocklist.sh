@@ -205,7 +205,7 @@ _remove_old_log_rules() {
   local chain="$1"
   local rule
   while true; do
-    rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A $chain .*--match-set $SET_NAME src.*-j LOG --log-prefix \"BLOCKED: \"" | head -1)"
+    rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A $chain .*--match-set $SET_NAME src.*-j LOG --log-prefix \"BLOCKED: \"" | head -1 || true)"
     [ -z "$rule" ] && break
     rule="${rule/#-A /-D }"
     eval "iptables $rule"

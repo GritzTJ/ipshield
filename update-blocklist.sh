@@ -54,6 +54,7 @@ URLS=(
 )
 SET_NAME="blacklist"
 WHITELIST=()
+WHITELIST_MIN_PREFIX=8
 DRY_RUN=0
 VERBOSE=0
 MIN_ENTRIES=1000
@@ -100,6 +101,12 @@ if [ "${#WHITELIST_SET_NAME}" -gt 31 ]; then
 fi
 if [ "$WHITELIST_SET_NAME" = "$SET_NAME" ]; then
   echo "Erreur : WHITELIST_SET_NAME ne doit pas être identique à SET_NAME." >&2
+  exit 1
+fi
+
+# --- Validation WHITELIST_MIN_PREFIX ---
+if ! [[ "$WHITELIST_MIN_PREFIX" =~ ^[0-9]+$ ]] || [ "$WHITELIST_MIN_PREFIX" -lt 0 ] || [ "$WHITELIST_MIN_PREFIX" -gt 32 ]; then
+  echo "Erreur : WHITELIST_MIN_PREFIX invalide ('$WHITELIST_MIN_PREFIX'). Entier 0-32 attendu." >&2
   exit 1
 fi
 
@@ -500,19 +507,34 @@ done
 if [ "${#WHITELIST[@]}" -gt 0 ]; then
   : > "$WL_FILE"
   invalid_wl=()
+  too_wide_wl=()
   for entry in "${WHITELIST[@]}"; do
     canonical="$(printf '%s\n' "$entry" | awk "$AWK_PROG")"
     if [ -z "$canonical" ]; then
       invalid_wl+=("$entry")
-    else
-      printf '%s\n' "$canonical" >> "$WL_FILE"
+      continue
     fi
+    # Garde-fou : refuser les préfixes trop larges (typo /0 = bypass total)
+    prefix="${canonical##*/}"
+    if [ "$prefix" -lt "$WHITELIST_MIN_PREFIX" ]; then
+      too_wide_wl+=("$entry (canonique : $canonical, préfixe /$prefix < seuil /$WHITELIST_MIN_PREFIX)")
+      continue
+    fi
+    printf '%s\n' "$canonical" >> "$WL_FILE"
   done
   if [ "${#invalid_wl[@]}" -gt 0 ]; then
     err "Erreur : entrée(s) WHITELIST invalide(s) :"
     for entry in "${invalid_wl[@]}"; do
       err "  - '$entry'"
     done
+    exit 1
+  fi
+  if [ "${#too_wide_wl[@]}" -gt 0 ]; then
+    err "Erreur : entrée(s) WHITELIST avec préfixe trop large (risque de bypass massif) :"
+    for entry in "${too_wide_wl[@]}"; do
+      err "  - $entry"
+    done
+    err "Pour autoriser un préfixe plus large, ajustez WHITELIST_MIN_PREFIX dans la config."
     exit 1
   fi
   # Dédup + tri

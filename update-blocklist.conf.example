@@ -35,6 +35,13 @@
 #  "198.51.100.0/24"
 #)
 
+# --- Garde-fou contre les prefixes trop larges en WHITELIST ---
+# Refuse toute entree de la WHITELIST dont le prefixe est < WHITELIST_MIN_PREFIX.
+# Defaut : 8 (rejette /0 a /7 = au-dela de 16M IPs autorisees, potentiellement
+# une typo qui ouvrirait le serveur a tout Internet). Mettre a 0 pour desactiver
+# le garde-fou (deconseille).
+#WHITELIST_MIN_PREFIX=8
+
 # --- Seuil minimum d'entrees ---
 # Si le nombre d'entrees valides est inferieur a ce seuil, le script
 # refuse la mise a jour (protection contre une source vide ou corrompue).

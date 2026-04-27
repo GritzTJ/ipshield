@@ -46,6 +46,7 @@ Par défaut, le script fonctionne sans fichier de configuration. Les variables p
 | `SET_NAME` | `blacklist` | Nom du set ipset blacklist |
 | `WHITELIST_SET_NAME` | `${SET_NAME}-allow` | Nom du set ipset whitelist |
 | `WHITELIST` | `()` (vide) | Tableau d'IP/CIDR IPv4 toujours autorisés (voir [Whitelist](#whitelist)) |
+| `WHITELIST_MIN_PREFIX` | `8` | Préfixe minimum accepté en WHITELIST (rejette /0 à /7 pour éviter un bypass total par typo). Mettre à 0 pour désactiver. |
 | `MIN_ENTRIES` | `1000` | Seuil minimum d'entrées (protection anti-purge) |
 | `BASE_HASHSIZE` | `16384` | Hashsize de base pour ipset |
 | `BASE_MAXELEM` | `300000` | Maxelem de base pour ipset |
@@ -145,6 +146,8 @@ Au prochain run, le script :
 3. Si `WHITELIST` est ensuite vidé : la règle ACCEPT et l'ipset whitelist sont automatiquement retirés au prochain run
 
 > **Attention** : la règle ACCEPT contourne **l'ensemble du filtrage firewall**, pas seulement la blocklist. Une IP whitelistée a un accès complet au serveur, indépendamment des autres règles. À réserver aux IP/subnets de confiance.
+
+> **Garde-fou anti-typo** : par défaut, tout préfixe < `/8` est refusé (`WHITELIST_MIN_PREFIX=8`). Cela bloque le piège classique d'un `0.0.0.0/0` accidentel qui ouvrirait tout Internet en bypass total. Si tu as un besoin légitime de préfixe plus large, abaisse `WHITELIST_MIN_PREFIX` explicitement.
 
 Vérification :
 

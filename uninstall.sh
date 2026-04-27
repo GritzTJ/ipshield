@@ -185,7 +185,7 @@ case "$FW" in
       rules_input="$(show_iptables_rules INPUT)"
       if [ -n "$rules_input" ]; then
         echo "  INPUT :"
-        echo "$rules_input" | sed 's/^/    /'
+        echo "$rules_input" | awk '{print "    " $0}'
       else
         echo "  INPUT : aucune règle ipshield présente."
       fi
@@ -193,7 +193,7 @@ case "$FW" in
         rules_docker="$(show_iptables_rules DOCKER-USER)"
         if [ -n "$rules_docker" ]; then
           echo "  DOCKER-USER :"
-          echo "$rules_docker" | sed 's/^/    /'
+          echo "$rules_docker" | awk '{print "    " $0}'
         else
           echo "  DOCKER-USER : aucune règle ipshield présente."
         fi
@@ -203,7 +203,7 @@ case "$FW" in
       ufw_rules="$(grep -E "match-set ($SET_NAME|$WHITELIST_SET_NAME) src" /etc/ufw/before.rules || true)"
       if [ -n "$ufw_rules" ]; then
         echo "  /etc/ufw/before.rules :"
-        echo "$ufw_rules" | sed 's/^/    /'
+        echo "$ufw_rules" | awk '{print "    " $0}'
       else
         echo "  /etc/ufw/before.rules : aucune règle ipshield présente."
       fi
@@ -212,7 +212,7 @@ case "$FW" in
   firewalld)
     fw_rules="$(firewall-cmd --permanent --direct --get-all-rules 2>/dev/null | grep -E "match-set ($SET_NAME|$WHITELIST_SET_NAME) src" || true)"
     if [ -n "$fw_rules" ]; then
-      echo "$fw_rules" | sed 's/^/    /'
+      echo "$fw_rules" | awk '{print "    " $0}'
     else
       echo "  Aucune règle ipshield (firewalld --direct) présente."
     fi
@@ -256,7 +256,7 @@ if [ -n "$cron_files" ]; then
   echo "  Lignes cron détectées :"
   echo "$cron_files" | while read -r f; do
     echo "    --- $f ---"
-    grep -nE "update-blocklist\.sh" "$f" | sed 's/^/      /'
+    grep -nE "update-blocklist\.sh" "$f" | awk '{print "      " $0}'
   done
   if [ "$APPLY" -eq 1 ]; then
     echo "  → le crontab de root sera proposé à la suppression (prompt séparé)."
@@ -292,9 +292,9 @@ case "$FW" in
     ;;
   firewalld)
     need_reload=0
-    remove_firewalld_rules INPUT && need_reload=1 || true
-    if [ "$DOCKER_PRESENT" -eq 1 ]; then
-      remove_firewalld_rules DOCKER-USER && need_reload=1 || true
+    if remove_firewalld_rules INPUT; then need_reload=1; fi
+    if [ "$DOCKER_PRESENT" -eq 1 ] && remove_firewalld_rules DOCKER-USER; then
+      need_reload=1
     fi
     [ "$need_reload" -eq 1 ] && firewall-cmd --reload
     ;;
@@ -333,7 +333,7 @@ if command -v crontab >/dev/null 2>&1; then
   if [ -n "$ipshield_lines" ]; then
     echo ""
     log "Lignes cron ipshield trouvées dans le crontab de root :"
-    echo "$ipshield_lines" | sed 's/^/    /'
+    echo "$ipshield_lines" | awk '{print "    " $0}'
     read -rp "Les retirer ? [oui/non] : " ans
     case "${ans,,}" in
       oui|yes|y|o)
@@ -357,7 +357,7 @@ other_cron="$(grep -lE "update-blocklist\.sh" /etc/crontab /etc/cron.d/* 2>/dev/
 if [ -n "$other_cron" ]; then
   echo ""
   log "Lignes cron ipshield aussi présentes dans (à retirer manuellement) :"
-  echo "$other_cron" | sed 's/^/    /'
+  echo "$other_cron" | awk '{print "    " $0}'
 fi
 
 # --- Retrait optionnel des configs rsyslog + logrotate ---

@@ -63,7 +63,6 @@ URLS=(
   "https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/refs/heads/main/abuseipdb-s100-365d.ipv4"
 )
 SET_NAME="blacklist"
-WHITELIST=()
 VERBOSE=0
 
 # --- Source config file (si existe) ---

@@ -149,6 +149,12 @@ Au prochain run, le script :
 
 > **Garde-fou anti-typo** : par défaut, tout préfixe < `/8` est refusé (`WHITELIST_MIN_PREFIX=8`). Cela bloque le piège classique d'un `0.0.0.0/0` accidentel qui ouvrirait tout Internet en bypass total. Si tu as un besoin légitime de préfixe plus large, abaisse `WHITELIST_MIN_PREFIX` explicitement.
 
+### Migration : ancien bug nftables (priorité de chaîne admin_access)
+
+Les versions de `setup-firewall.sh` antérieures au 2026-04-28 créaient la chaîne nftables `inet admin_access input` à priorité `-10` (avant le blocklist à priorité 0). Conséquence : sur un setup nftables, les IPs blacklistées passaient quand même sur les ports SAFE_PORTS (SSH inclus) car le `accept` du chain admin_access s'évaluait avant le `drop` du blocklist.
+
+`setup-firewall.sh` détecte automatiquement cette config buggée au démarrage et migre la chaîne vers priorité `10` (après le blocklist) en préservant les ports déjà ouverts. **Il suffit de relancer `./setup-firewall.sh` une fois** ; un message `Migration : chaîne 'inet admin_access input' détectée à priorité -10` confirme la correction. Les autres firewalls (iptables, ufw, firewalld) ne sont pas concernés.
+
 Vérification :
 
 ```bash

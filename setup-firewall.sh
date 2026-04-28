@@ -330,6 +330,32 @@ configure_logs() {
   fi
 }
 
+# --- Migration : ancien bug de priorité de la chaîne nftables admin_access ---
+# Avant ce fix, la chaîne 'inet admin_access input' était créée à priorité -10
+# (avant le blocklist à priorité 0). Conséquence : sur nftables, les IPs
+# blacklistées passaient quand même sur les ports SSH/SAFE_PORTS car le accept
+# de admin_access s'évaluait avant le drop du blocklist.
+# La priorité doit être positive pour que le blocklist drop s'applique d'abord.
+if command -v nft >/dev/null 2>&1; then
+  # Le pattern matche les deux formes : "priority -10" et "priority filter - 10"
+  # (nftables canonicalise selon la version : raw int sur ancienne, named+offset sur récente)
+  if nft list chain inet admin_access input 2>/dev/null | grep -qE "priority [^;]*-[[:space:]]*10"; then
+    log "Migration : chaîne 'inet admin_access input' détectée à priorité -10 (ancien bug)."
+    existing_ports="$(nft list chain inet admin_access input 2>/dev/null \
+      | awk '/tcp dport [0-9]+ accept/{for(i=1;i<=NF;i++) if ($i=="dport") print $(i+1)}' \
+      | tr '\n' ' ' | sed 's/ *$//')"
+    nft delete chain inet admin_access input
+    nft add chain inet admin_access input '{ type filter hook input priority 10 ; policy accept ; }'
+    if [ -n "$existing_ports" ]; then
+      for p in $existing_ports; do
+        nft add rule inet admin_access input tcp dport "$p" accept
+      done
+      log "  Règles restaurées : ports $existing_ports"
+    fi
+    log "  Priorité corrigée à 10 → le blocklist (priorité 0) s'évalue désormais AVANT."
+  fi
+fi
+
 # --- Affichage résultat détection ---
 echo ""
 if [ "$DETECTED" = "aucun" ]; then
@@ -574,7 +600,9 @@ case "$FIREWALL" in
     systemctl start nftables
     if [ -n "$SAFE_PORTS" ]; then
       nft add table inet admin_access 2>/dev/null || true
-      nft add chain inet admin_access input '{ type filter hook input priority -10 ; policy accept ; }' 2>/dev/null || true
+      # Priorité 10 (POSITIVE, après le blocklist à priorité 0) : si une IP est
+      # blacklistée, elle est droppée par le blocklist AVANT d'arriver à ce ACCEPT.
+      nft add chain inet admin_access input '{ type filter hook input priority 10 ; policy accept ; }' 2>/dev/null || true
       for p in $SAFE_PORTS; do
         nft add rule inet admin_access input tcp dport "$p" accept
       done

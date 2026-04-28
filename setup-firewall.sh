@@ -241,24 +241,26 @@ _install_config() {
 # --- Configuration des logs (rsyslog filter + logrotate) ---
 configure_logs() {
   echo ""
-  if ! ask_yes_no "Configurer rsyslog + logrotate pour les logs ipshield ?" oui; then
-    log "Logs non configurés. Pour le faire plus tard, relancez ./setup-firewall.sh."
-    return 0
-  fi
 
+  # Détection rsyslog AVANT le prompt pour adapter le wording
   local has_rsyslog=0
   if systemctl is-active --quiet rsyslog 2>/dev/null; then
     has_rsyslog=1
   fi
 
-  if [ "$has_rsyslog" -eq 0 ]; then
+  if [ "$has_rsyslog" -eq 1 ]; then
+    # rsyslog actif : un seul prompt
+    if ! ask_yes_no "Configurer le filtre rsyslog + logrotate pour les logs ipshield ?" oui; then
+      log "Logs non configurés. Pour le faire plus tard, relancez ./setup-firewall.sh."
+      return 0
+    fi
+  else
+    # rsyslog absent : informer puis proposer install
+    log "rsyslog n'est pas actif sur ce système."
+    log "  - Avec rsyslog  : fichier dédié /var/log/blocked-ips.log avec rotation."
+    log "  - Sans rsyslog  : logs dans journald, via 'journalctl -k --grep BLOCKED:'"
     echo ""
-    log "rsyslog n'est pas actif sur ce système. Deux options :"
-    log "  1) Installer rsyslog → fichier dédié /var/log/blocked-ips.log avec rotation."
-    log "  2) Garder journald → les logs vont dans le journal système, consultables via :"
-    log "       journalctl -k --grep 'BLOCKED:'"
-    echo ""
-    if ask_yes_no "Installer rsyslog maintenant ?" oui; then
+    if ask_yes_no "Installer rsyslog et configurer le filtre + logrotate ?" oui; then
       log "Installation de rsyslog..."
       if [ "$PKG_MANAGER" = "apt" ]; then
         apt install -y rsyslog
@@ -275,8 +277,13 @@ configure_logs() {
         log "Pour consulter les logs : journalctl -k --grep 'BLOCKED:'"
       fi
     else
-      log "rsyslog non installé. Le filtre sera ignoré."
-      log "Pour consulter les logs des paquets bloqués : journalctl -k --grep 'BLOCKED:'"
+      # rsyslog refusé : proposer logrotate seul (utile pour /var/log/update-blocklist.log)
+      if ! ask_yes_no "Installer quand même logrotate seul (sans filtre rsyslog) ?" oui; then
+        log "Logs non configurés. Tu peux consulter les paquets bloqués via :"
+        log "  journalctl -k --grep 'BLOCKED:'"
+        return 0
+      fi
+      log "Installation de logrotate uniquement (sans filtre rsyslog)."
     fi
   fi
 

@@ -248,7 +248,7 @@ _apply_iptables_rules() {
 _apply_whitelist_iptables() {
   local chain="$1"
   local first_rule
-  first_rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A" | head -1)"
+  first_rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A" | head -1 || true)"
   if echo "$first_rule" | grep -qE -- "--match-set $WHITELIST_SET_NAME src .*-j ACCEPT$"; then
     return
   fi

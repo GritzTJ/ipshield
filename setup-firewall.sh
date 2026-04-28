@@ -97,11 +97,16 @@ configure_cron() {
     return 0
   fi
 
+  # Lecture initiale du crontab (réutilisée pour défaut path + filtre).
+  # `|| true` : crontab -l retourne 1 si pas de crontab user → ne pas faire échouer set -e.
+  local current_cron
+  current_cron="$(crontab -l 2>/dev/null || true)"
+
   # Chemin par défaut : crontab existante > même répertoire que ce script
   local script_dir script_path log_path mailto reboot_delay existing_path
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   script_path="$script_dir/update-blocklist.sh"
-  existing_path="$(crontab -l 2>/dev/null | awk '
+  existing_path="$(printf '%s\n' "$current_cron" | awk '
     /update-blocklist\.sh/ {
       for (i=1; i<=NF; i++) if ($i ~ /update-blocklist\.sh$/) { print $i; exit }
     }')"
@@ -134,11 +139,8 @@ configure_cron() {
     reboot_delay="$ans"
   fi
 
-  # Lecture crontab actuel
-  local current_cron filtered_cron new_lines new_cron
-  current_cron="$(crontab -l 2>/dev/null || true)"
-
   # Filtre les lignes ipshield existantes (par basename) + MAILTO si on en pose un nouveau
+  local filtered_cron new_lines new_cron
   local script_basename mailto_drop
   script_basename="$(basename "$script_path")"
   mailto_drop=0
@@ -478,33 +480,35 @@ log "Installation du paquet $FIREWALL..."
 if [ "$PKG_MANAGER" = "apt" ]; then
   apt update -qq
 fi
+# `ipset` est installé en même temps que le firewall (dépendance d'update-blocklist.sh,
+# souvent absente sur Debian minimal et causerait sinon "commande manquante: ipset").
 case "$FIREWALL" in
   iptables)
     if [ "$PKG_MANAGER" = "apt" ]; then
-      apt install -y iptables
+      apt install -y iptables ipset
     else
-      dnf install -y iptables
+      dnf install -y iptables ipset
     fi
     ;;
   nftables)
     if [ "$PKG_MANAGER" = "apt" ]; then
-      apt install -y nftables
+      apt install -y nftables ipset
     else
-      dnf install -y nftables
+      dnf install -y nftables ipset
     fi
     ;;
   firewalld)
     if [ "$PKG_MANAGER" = "apt" ]; then
-      apt install -y firewalld
+      apt install -y firewalld ipset
     else
-      dnf install -y firewalld
+      dnf install -y firewalld ipset
     fi
     ;;
   ufw)
     if [ "$PKG_MANAGER" = "apt" ]; then
-      apt install -y ufw
+      apt install -y ufw ipset
     else
-      dnf install -y ufw
+      dnf install -y ufw ipset
     fi
     ;;
 esac

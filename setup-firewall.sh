@@ -235,8 +235,39 @@ configure_logs() {
   local has_rsyslog=0
   if systemctl is-active --quiet rsyslog 2>/dev/null; then
     has_rsyslog=1
-  else
-    err "rsyslog n'est pas actif — le filtre ne sera pas installé. Logrotate sera tout de même proposé."
+  fi
+
+  if [ "$has_rsyslog" -eq 0 ]; then
+    echo ""
+    log "rsyslog n'est pas actif sur ce système. Deux options :"
+    log "  1) Installer rsyslog → fichier dédié /var/log/blocked-ips.log avec rotation."
+    log "  2) Garder journald → les logs vont dans le journal système, consultables via :"
+    log "       journalctl -k --grep 'BLOCKED:'"
+    echo ""
+    read -rp "Installer rsyslog maintenant ? [oui/non] : " ans
+    case "${ans,,}" in
+      oui|yes|y|o)
+        log "Installation de rsyslog..."
+        if [ "$PKG_MANAGER" = "apt" ]; then
+          apt install -y rsyslog
+        else
+          dnf install -y rsyslog
+        fi
+        systemctl enable rsyslog 2>/dev/null || true
+        systemctl start rsyslog 2>/dev/null || true
+        if systemctl is-active --quiet rsyslog 2>/dev/null; then
+          has_rsyslog=1
+          log "rsyslog installé et actif."
+        else
+          err "rsyslog installé mais pas actif après start. Le filtre sera ignoré."
+          log "Pour consulter les logs : journalctl -k --grep 'BLOCKED:'"
+        fi
+        ;;
+      *)
+        log "rsyslog non installé. Le filtre sera ignoré."
+        log "Pour consulter les logs des paquets bloqués : journalctl -k --grep 'BLOCKED:'"
+        ;;
+    esac
   fi
 
   # Contenus attendus (alignés avec INSTALL.md)

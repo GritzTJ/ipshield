@@ -135,7 +135,7 @@ TEMP_SET="${SET_NAME}-tmp-$$"
 WL_TEMP_SET="${WHITELIST_SET_NAME}-tmp-$$"
 WL_FILE="${TMP_DIR}/whitelist"
 WL_TMP_FILE="${TMP_DIR}/wl_restore"
-CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize 52428800 --retry 3 --retry-delay 2 --retry-all-errors )
+CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize 10485760 --retry 3 --retry-delay 2 --retry-all-errors )
 
 if [ "${#TEMP_SET}" -gt 31 ]; then
   echo "Erreur : nom de set temporaire trop long (${#TEMP_SET} > 31)" >&2

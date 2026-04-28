@@ -338,8 +338,9 @@ configure_logs() {
 # La priorité doit être positive pour que le blocklist drop s'applique d'abord.
 if command -v nft >/dev/null 2>&1; then
   # Le pattern matche les deux formes : "priority -10" et "priority filter - 10"
-  # (nftables canonicalise selon la version : raw int sur ancienne, named+offset sur récente)
-  if nft list chain inet admin_access input 2>/dev/null | grep -qE "priority [^;]*-[[:space:]]*10"; then
+  # (nftables canonicalise selon la version : raw int sur ancienne, named+offset sur récente).
+  # Le ";" final ancre la valeur pour éviter de matcher -100, -101, etc.
+  if nft list chain inet admin_access input 2>/dev/null | grep -qE "priority [^;]*-[[:space:]]*10[[:space:]]*;"; then
     log "Migration : chaîne 'inet admin_access input' détectée à priorité -10 (ancien bug)."
     existing_ports="$(nft list chain inet admin_access input 2>/dev/null \
       | awk '/tcp dport [0-9]+ accept/{for(i=1;i<=NF;i++) if ($i=="dport") print $(i+1)}' \

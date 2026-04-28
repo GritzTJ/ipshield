@@ -78,6 +78,19 @@ if [[ ! "$WHITELIST_SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
   exit 1
 fi
 
+# --- Verrou partagé avec update-blocklist.sh (anti-race contre cron) ---
+# Sans ce lock, un cron de update-blocklist.sh pourrait re-créer les règles
+# entre le retrait par uninstall et la destruction des ipsets, laissant un
+# état partiellement installé.
+LOCK_DIR="/run/lock"
+LOCK_FILE="${LOCK_DIR}/${SET_NAME}.lock"
+mkdir -p "$LOCK_DIR"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "Erreur : update-blocklist.sh tourne déjà ; réessayez dans quelques secondes." >&2
+  exit 1
+fi
+
 # --- Fonctions ---
 log() { echo "$*"; }
 err() { echo "$*" >&2; }

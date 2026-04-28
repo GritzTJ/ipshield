@@ -149,6 +149,55 @@ Au prochain run, le script :
 
 > **Garde-fou anti-typo** : par défaut, tout préfixe < `/8` est refusé (`WHITELIST_MIN_PREFIX=8`). Cela bloque le piège classique d'un `0.0.0.0/0` accidentel qui ouvrirait tout Internet en bypass total. Si tu as un besoin légitime de préfixe plus large, abaisse `WHITELIST_MIN_PREFIX` explicitement.
 
+### Fenêtre de fail-open au reboot
+
+**Problème.** Au reboot du serveur, l'`ipset blacklist` (qui vit en RAM) est vide. Tant que `update-blocklist.sh` n'a pas tourné via la cron `@reboot`, le filtrage ne fonctionne pas :
+
+- **iptables / nftables** : les règles ne sont pas persistées sur disque par défaut → tables vides au boot, aucun blocage.
+- **ufw** : `before.rules` est restauré, mais les règles `--match-set blacklist src` matchent contre un ipset qui n'existe pas → match silencieusement faux → trafic blacklisté passe.
+- **firewalld** : les règles `--direct` sont persistées dans `direct.xml` mais idem, ipset absent → match faux.
+
+Avec le défaut `@reboot sleep 60 && update-blocklist.sh`, la fenêtre vulnérable est **~60-90 secondes** (sleep + téléchargement listes + build ipset).
+
+**Mitigations** (par ordre de simplicité) :
+
+1. **Si pas de Docker** : configurer le délai `@reboot` à `0` pour démarrer immédiatement (réduit la fenêtre à ~15s, le temps du téléchargement). Choix proposé par `setup-firewall.sh` étape 7.
+
+2. **Persistance ipset (recommandé pour prod)** : sauvegarder l'ipset après chaque run et le restaurer au boot avant le firewall. Setup manuel :
+
+   ```bash
+   # Créer un service systemd qui restaure l'ipset au boot
+   sudo mkdir -p /var/lib/ipshield
+   sudo tee /etc/systemd/system/ipshield-restore.service <<'EOF'
+   [Unit]
+   Description=Restore ipshield ipsets before firewall start
+   DefaultDependencies=no
+   Before=netfilter-persistent.service nftables.service ufw.service firewalld.service
+   ConditionPathExists=/var/lib/ipshield/ipset.save
+
+   [Service]
+   Type=oneshot
+   ExecStart=/sbin/ipset restore -! -f /var/lib/ipshield/ipset.save
+   RemainAfterExit=yes
+
+   [Install]
+   WantedBy=sysinit.target
+   EOF
+   sudo systemctl enable ipshield-restore.service
+
+   # Sauvegarde initiale
+   sudo ipset save > /var/lib/ipshield/ipset.save
+   ```
+
+   Puis ajoute en fin de `update-blocklist.sh` (ou via cron séparé) :
+   ```bash
+   ipset save > /var/lib/ipshield/ipset.save
+   ```
+
+   Au reboot : `ipshield-restore` charge l'ipset depuis disque AVANT que le firewall démarre. Les règles `--match-set` matchent immédiatement. Pas de fenêtre vulnérable.
+
+3. **Acceptation du risque** : pour un serveur derrière un load balancer ou avec d'autres défenses (fail2ban, WAF), la fenêtre 60s peut être acceptable.
+
 ### Migration : ancien bug nftables (priorité de chaîne admin_access)
 
 Les versions de `setup-firewall.sh` antérieures au 2026-04-28 créaient la chaîne nftables `inet admin_access input` à priorité `-10` (avant le blocklist à priorité 0). Conséquence : sur un setup nftables, les IPs blacklistées passaient quand même sur les ports SAFE_PORTS (SSH inclus) car le `accept` du chain admin_access s'évaluait avant le `drop` du blocklist.

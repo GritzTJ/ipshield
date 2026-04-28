@@ -212,7 +212,7 @@ BEGIN {
 '
 
 # --- Options curl ---
-CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize 52428800 --retry 3 --retry-delay 2 --retry-all-errors )
+CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize 10485760 --retry 3 --retry-delay 2 --retry-all-errors )
 
 # --- Affichage ---
 log "Recherche de $TARGET_IP dans ${#URLS[@]} listes de blocage..."

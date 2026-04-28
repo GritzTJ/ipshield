@@ -82,6 +82,30 @@ fi
 log() { echo "$*"; }
 err() { echo "$*" >&2; }
 
+# --- Prompt oui/non uniforme avec défaut ---
+# Usage : ask_yes_no "Question" oui|non
+# Retour : 0 si oui, 1 si non. Entrée vide = défaut. Réponse invalide = ré-interrogation.
+ask_yes_no() {
+  local prompt="$1"
+  local default="$2"
+  local hint
+  if [ "$default" = "oui" ]; then
+    hint="[Oui/non]"
+  else
+    hint="[oui/Non]"
+  fi
+  local ans
+  while true; do
+    read -rp "$prompt $hint : " ans
+    [ -z "$ans" ] && ans="$default"
+    case "${ans,,}" in
+      oui|o|yes|y) return 0 ;;
+      non|n|no)    return 1 ;;
+      *) echo "  Réponse invalide. Tapez oui/non (ou Entrée pour [$default])." ;;
+    esac
+  done
+}
+
 if [ "$APPLY" -eq 1 ]; then
   PREFIX=""
 else
@@ -275,11 +299,10 @@ if [ "$APPLY" -eq 0 ]; then
 fi
 
 # --- Confirmation ---
-read -rp "Confirmer la désinstallation ? [oui/non] : " confirm
-case "${confirm,,}" in
-  oui|yes|y|o) ;;
-  *) log "Annulation."; exit 0 ;;
-esac
+if ! ask_yes_no "Confirmer la désinstallation ?" non; then
+  log "Annulation."
+  exit 0
+fi
 
 # --- Application ---
 log "Suppression des règles..."
@@ -334,21 +357,19 @@ if command -v crontab >/dev/null 2>&1; then
     echo ""
     log "Lignes cron ipshield trouvées dans le crontab de root :"
     echo "$ipshield_lines" | awk '{print "    " $0}'
-    read -rp "Les retirer ? [oui/non] : " ans
-    case "${ans,,}" in
-      oui|yes|y|o)
-        new_cron="$(printf '%s\n' "$current_cron" | grep -vE "update-blocklist\.sh" || true)"
-        new_cron="${new_cron%$'\n'}"
-        if [ -z "$new_cron" ]; then
-          crontab -r 2>/dev/null || true
-          log "Crontab de root vidé."
-        else
-          printf '%s\n' "$new_cron" | crontab -
-          log "Crontab de root mis à jour (lignes ipshield retirées)."
-        fi
-        ;;
-      *) log "Lignes cron conservées." ;;
-    esac
+    if ask_yes_no "Les retirer ?" oui; then
+      new_cron="$(printf '%s\n' "$current_cron" | grep -vE "update-blocklist\.sh" || true)"
+      new_cron="${new_cron%$'\n'}"
+      if [ -z "$new_cron" ]; then
+        crontab -r 2>/dev/null || true
+        log "Crontab de root vidé."
+      else
+        printf '%s\n' "$new_cron" | crontab -
+        log "Crontab de root mis à jour (lignes ipshield retirées)."
+      fi
+    else
+      log "Lignes cron conservées."
+    fi
   fi
 fi
 
@@ -372,29 +393,27 @@ if [ "${#present_log_configs[@]}" -gt 0 ]; then
   for f in "${present_log_configs[@]}"; do
     echo "    $f"
   done
-  read -rp "Les retirer ? [oui/non] : " ans
-  case "${ans,,}" in
-    oui|yes|y|o)
-      restart_rsyslog=0
-      for f in "${present_log_configs[@]}"; do
-        if rm -f "$f" 2>/dev/null; then
-          log "  $f supprimé."
-          [[ "$f" == /etc/rsyslog.d/* ]] && restart_rsyslog=1
-        else
-          err "  Impossible de retirer $f."
-        fi
-      done
-      if [ "$restart_rsyslog" -eq 1 ]; then
-        if systemctl restart rsyslog 2>/dev/null; then
-          log "rsyslog redémarré."
-        else
-          err "Impossible de redémarrer rsyslog."
-        fi
+  if ask_yes_no "Les retirer ?" oui; then
+    restart_rsyslog=0
+    for f in "${present_log_configs[@]}"; do
+      if rm -f "$f" 2>/dev/null; then
+        log "  $f supprimé."
+        [[ "$f" == /etc/rsyslog.d/* ]] && restart_rsyslog=1
+      else
+        err "  Impossible de retirer $f."
       fi
-      log "Note : les fichiers de log /var/log/update-blocklist.log et /var/log/blocked-ips.log sont conservés."
-      ;;
-    *) log "Configs conservées." ;;
-  esac
+    done
+    if [ "$restart_rsyslog" -eq 1 ]; then
+      if systemctl restart rsyslog 2>/dev/null; then
+        log "rsyslog redémarré."
+      else
+        err "Impossible de redémarrer rsyslog."
+      fi
+    fi
+    log "Note : les fichiers de log /var/log/update-blocklist.log et /var/log/blocked-ips.log sont conservés."
+  else
+    log "Configs conservées."
+  fi
 fi
 
 echo ""

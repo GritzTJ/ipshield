@@ -27,6 +27,30 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || { err "commande manquante : $1"; exit 1; }
 }
 
+# --- Prompt oui/non uniforme avec défaut ---
+# Usage : ask_yes_no "Question" oui|non
+# Retour : 0 si oui, 1 si non. Entrée vide = défaut. Réponse invalide = ré-interrogation.
+ask_yes_no() {
+  local prompt="$1"
+  local default="$2"
+  local hint
+  if [ "$default" = "oui" ]; then
+    hint="[Oui/non]"
+  else
+    hint="[oui/Non]"
+  fi
+  local ans
+  while true; do
+    read -rp "$prompt $hint : " ans
+    [ -z "$ans" ] && ans="$default"
+    case "${ans,,}" in
+      oui|o|yes|y) return 0 ;;
+      non|n|no)    return 1 ;;
+      *) echo "  Réponse invalide. Tapez oui/non (ou Entrée pour [$default])." ;;
+    esac
+  done
+}
+
 # --- Vérification root ---
 if [ "$(id -u)" -ne 0 ]; then
   err "ce script doit être exécuté en tant que root."
@@ -83,13 +107,10 @@ DETECTED="$(detect_firewall)"
 # --- Configuration du cron (prompt interactif idempotent) ---
 configure_cron() {
   echo ""
-  read -rp "Configurer le cron ipshield maintenant ? [oui/non] : " ans
-  case "${ans,,}" in
-    oui|yes|y|o) ;;
-    *)
-      log "Cron non configuré. Pour le faire plus tard, relancez ./setup-firewall.sh."
-      return 0 ;;
-  esac
+  if ! ask_yes_no "Configurer le cron ipshield maintenant ?" oui; then
+    log "Cron non configuré. Pour le faire plus tard, relancez ./setup-firewall.sh."
+    return 0
+  fi
 
   # Vérification crontab disponible
   if ! command -v crontab >/dev/null 2>&1; then
@@ -183,11 +204,10 @@ configure_cron() {
     return 0
   fi
 
-  read -rp "Appliquer ? [oui/non] : " ans
-  case "${ans,,}" in
-    oui|yes|y|o) ;;
-    *) log "Cron non modifié."; return 0 ;;
-  esac
+  if ! ask_yes_no "Appliquer ?" oui; then
+    log "Cron non modifié."
+    return 0
+  fi
 
   printf '%s\n' "$new_cron" | crontab -
   log "Crontab mis à jour."
@@ -207,12 +227,10 @@ _install_config() {
       return 1
     fi
     log "  $desc : contenu différent ($path)"
-    local ans
-    read -rp "  Écraser ? [oui/non] : " ans
-    case "${ans,,}" in
-      oui|yes|y|o) ;;
-      *) log "  Conservé tel quel."; return 1 ;;
-    esac
+    if ! ask_yes_no "  Écraser ?" non; then
+      log "  Conservé tel quel."
+      return 1
+    fi
   fi
   printf '%s\n' "$content" > "$path"
   chmod 644 "$path"
@@ -223,14 +241,10 @@ _install_config() {
 # --- Configuration des logs (rsyslog filter + logrotate) ---
 configure_logs() {
   echo ""
-  local ans
-  read -rp "Configurer rsyslog + logrotate pour les logs ipshield ? [oui/non] : " ans
-  case "${ans,,}" in
-    oui|yes|y|o) ;;
-    *)
-      log "Logs non configurés. Pour le faire plus tard, relancez ./setup-firewall.sh."
-      return 0 ;;
-  esac
+  if ! ask_yes_no "Configurer rsyslog + logrotate pour les logs ipshield ?" oui; then
+    log "Logs non configurés. Pour le faire plus tard, relancez ./setup-firewall.sh."
+    return 0
+  fi
 
   local has_rsyslog=0
   if systemctl is-active --quiet rsyslog 2>/dev/null; then
@@ -244,30 +258,26 @@ configure_logs() {
     log "  2) Garder journald → les logs vont dans le journal système, consultables via :"
     log "       journalctl -k --grep 'BLOCKED:'"
     echo ""
-    read -rp "Installer rsyslog maintenant ? [oui/non] : " ans
-    case "${ans,,}" in
-      oui|yes|y|o)
-        log "Installation de rsyslog..."
-        if [ "$PKG_MANAGER" = "apt" ]; then
-          apt install -y rsyslog
-        else
-          dnf install -y rsyslog
-        fi
-        systemctl enable rsyslog 2>/dev/null || true
-        systemctl start rsyslog 2>/dev/null || true
-        if systemctl is-active --quiet rsyslog 2>/dev/null; then
-          has_rsyslog=1
-          log "rsyslog installé et actif."
-        else
-          err "rsyslog installé mais pas actif après start. Le filtre sera ignoré."
-          log "Pour consulter les logs : journalctl -k --grep 'BLOCKED:'"
-        fi
-        ;;
-      *)
-        log "rsyslog non installé. Le filtre sera ignoré."
-        log "Pour consulter les logs des paquets bloqués : journalctl -k --grep 'BLOCKED:'"
-        ;;
-    esac
+    if ask_yes_no "Installer rsyslog maintenant ?" oui; then
+      log "Installation de rsyslog..."
+      if [ "$PKG_MANAGER" = "apt" ]; then
+        apt install -y rsyslog
+      else
+        dnf install -y rsyslog
+      fi
+      systemctl enable rsyslog 2>/dev/null || true
+      systemctl start rsyslog 2>/dev/null || true
+      if systemctl is-active --quiet rsyslog 2>/dev/null; then
+        has_rsyslog=1
+        log "rsyslog installé et actif."
+      else
+        err "rsyslog installé mais pas actif après start. Le filtre sera ignoré."
+        log "Pour consulter les logs : journalctl -k --grep 'BLOCKED:'"
+      fi
+    else
+      log "rsyslog non installé. Le filtre sera ignoré."
+      log "Pour consulter les logs des paquets bloqués : journalctl -k --grep 'BLOCKED:'"
+    fi
   fi
 
   # Contenus attendus (alignés avec INSTALL.md)

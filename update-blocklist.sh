@@ -51,6 +51,11 @@ URLS=(
   "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt"
   "https://cinsscore.com/list/ci-badguys.txt"
   "https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/refs/heads/main/abuseipdb-s100-365d.ipv4"
+  "https://iplists.firehol.org/files/firehol_level1.netset"
+  "https://blocklist.greensnow.co/greensnow.txt"
+  "https://lists.blocklist.de/lists/all.txt"
+  "https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt"
+  "https://check.torproject.org/torbulkexitlist"
 )
 SET_NAME="blacklist"
 WHITELIST=()

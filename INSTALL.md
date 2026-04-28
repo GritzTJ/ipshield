@@ -64,6 +64,11 @@ Le script télécharge et agrège les listes suivantes :
 | [Emerging Threats](https://rules.emergingthreats.net/) | IP bloquées par règles ET |
 | [CI Army (CINS)](https://cinsscore.com/) | IP à mauvais score de réputation |
 | [AbuseIPDB](https://github.com/borestad/blocklist-abuseipdb) | IP signalées avec un score de 100% sur 365 jours |
+| [FireHOL Level 1](https://iplists.firehol.org/) | Méta-liste curée, faible faux-positif |
+| [GreenSnow](https://blocklist.greensnow.co/) | Brute-force SSH/HTTP actifs |
+| [Blocklist.de](https://www.blocklist.de/) | IP signalées (SSH, mail, web, FTP, etc.) |
+| [IPsum](https://github.com/stamparm/ipsum) | Agrégat de 30+ sources, IPs vues dans ≥3 listes |
+| [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Exits Tor (à retirer si tu acceptes le trafic Tor) |
 
 Ces sources sont personnalisables via la variable `URLS` dans `/etc/update-blocklist.conf`.
 

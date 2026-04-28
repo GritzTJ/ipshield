@@ -21,7 +21,7 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 
 ### Fonctionnalités
 
-- Agrège **5 listes publiques** de blocage IPv4 (Spamhaus DROP, Emerging Threats, AbuseIPDB, CINS, Data-Shield)
+- Agrège **10 listes publiques** de blocage IPv4 (Spamhaus DROP, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, Tor exit nodes)
 - Téléchargements **parallèles** avec retry et timeout
 - **Validation stricte** des IP/CIDR (programme awk fusionné)
 - Mise à jour **atomique** via `ipset restore` + `swap` (zéro downtime)
@@ -112,6 +112,11 @@ update-blocklist.sh [OPTIONS]
 | [AbuseIPDB](https://github.com/borestad/blocklist-abuseipdb) | IP signalées avec un score de 100% sur 365 jours |
 | [CI Army (CINS)](https://cinsscore.com/) | IP à mauvais score de réputation |
 | [Data-Shield](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist) | Liste critique d'IP malveillantes |
+| [FireHOL Level 1](https://iplists.firehol.org/) | Méta-liste curée, faible faux-positif |
+| [GreenSnow](https://blocklist.greensnow.co/) | Brute-force SSH/HTTP actifs |
+| [Blocklist.de](https://www.blocklist.de/) | IP signalées (SSH, mail, web, FTP, etc.) |
+| [IPsum](https://github.com/stamparm/ipsum) | Agrégat de 30+ sources, IPs vues dans ≥3 listes |
+| [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Exits Tor (à retirer si tu acceptes le trafic Tor) |
 
 Sources personnalisables via la variable `URLS` dans `/etc/update-blocklist.conf`.
 
@@ -132,7 +137,7 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 
 ### Features
 
-- Aggregates **5 public** IPv4 blocklists (Spamhaus DROP, Emerging Threats, AbuseIPDB, CINS, Data-Shield)
+- Aggregates **10 public** IPv4 blocklists (Spamhaus DROP, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, Tor exit nodes)
 - **Parallel** downloads with retry and timeout
 - **Strict validation** of IPs/CIDRs (single fused awk program)
 - **Atomic** updates via `ipset restore` + `swap` (zero downtime)
@@ -223,6 +228,11 @@ update-blocklist.sh [OPTIONS]
 | [AbuseIPDB](https://github.com/borestad/blocklist-abuseipdb) | IPs reported with 100% score over 365 days |
 | [CI Army (CINS)](https://cinsscore.com/) | IPs with poor reputation score |
 | [Data-Shield](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist) | Critical malicious IP list |
+| [FireHOL Level 1](https://iplists.firehol.org/) | Curated meta-list, low false-positive |
+| [GreenSnow](https://blocklist.greensnow.co/) | Active SSH/HTTP brute-force IPs |
+| [Blocklist.de](https://www.blocklist.de/) | Reported IPs (SSH, mail, web, FTP, etc.) |
+| [IPsum](https://github.com/stamparm/ipsum) | Aggregator of 30+ sources, IPs in ≥3 lists |
+| [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Tor exits (remove if you accept Tor traffic) |
 
 Sources are customisable via the `URLS` variable in `/etc/update-blocklist.conf`.
 

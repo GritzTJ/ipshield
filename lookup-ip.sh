@@ -136,12 +136,17 @@ source_name() {
   local url="$1"
   local idx="$2"
   case "$url" in
-    *duggytuxy*)           echo "Data-Shield" ;;
-    *spamhaus.org*drop*)   echo "Spamhaus DROP" ;;
-    *emergingthreats.net*) echo "Emerging Threats" ;;
-    *cinsscore.com*)       echo "CINS" ;;
-    *abuseipdb*)           echo "AbuseIPDB" ;;
-    *)                     echo "Source $((idx+1))" ;;
+    *duggytuxy*)             echo "Data-Shield" ;;
+    *spamhaus.org*drop*)     echo "Spamhaus DROP" ;;
+    *emergingthreats.net*)   echo "Emerging Threats" ;;
+    *cinsscore.com*)         echo "CINS" ;;
+    *abuseipdb*)             echo "AbuseIPDB" ;;
+    *firehol*)               echo "FireHOL Level 1" ;;
+    *greensnow*)             echo "GreenSnow" ;;
+    *blocklist.de*)          echo "Blocklist.de" ;;
+    *stamparm/ipsum*)        echo "IPsum" ;;
+    *torproject.org*)        echo "Tor exits" ;;
+    *)                       echo "Source $((idx+1))" ;;
   esac
 }
 

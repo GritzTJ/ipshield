@@ -61,6 +61,11 @@ URLS=(
   "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt"
   "https://cinsscore.com/list/ci-badguys.txt"
   "https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/refs/heads/main/abuseipdb-s100-365d.ipv4"
+  "https://iplists.firehol.org/files/firehol_level1.netset"
+  "https://blocklist.greensnow.co/greensnow.txt"
+  "https://lists.blocklist.de/lists/all.txt"
+  "https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt"
+  "https://check.torproject.org/torbulkexitlist"
 )
 SET_NAME="blacklist"
 VERBOSE=0
@@ -176,6 +181,7 @@ function valid_cidr(p) {
   return (p+0 >= 0 && p+0 <= 32);
 }
 {
+  # Extraction : normaliser espaces, extraire premier champ commençant par un chiffre
   gsub(/[[:space:]]+/, " ");
   sub(/^[[:space:]]+/, "");
   if ($0 !~ /^[0-9]/) next;
@@ -185,6 +191,7 @@ function valid_cidr(p) {
   sub(/[[:space:]]+$/, "", x);
   if (x == "") next;
 
+  # Validation + canonicalisation
   if (index(x, "/")) {
     split(x, t, "/");
     if (valid_ipv4(t[1]) && valid_cidr(t[2])) print t[1] "/" t[2];

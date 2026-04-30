@@ -42,6 +42,7 @@ WHITELIST_SET_NAME="${SET_NAME}-allow"
 #  "10.0.0.0/8"
 #  "172.16.0.0/12"
 #  "192.168.0.0/16"
+#  "203.0.113.42"
 #)
 
 # --- Garde-fou contre les prefixes trop larges en WHITELIST ---

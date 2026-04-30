@@ -113,8 +113,8 @@ ask_yes_no() {
     read -rp "$prompt $hint: " ans
     [ -z "$ans" ] && ans="$default"
     case "${ans,,}" in
-      yes|y|oui|o) return 0 ;;
-      no|n|non)    return 1 ;;
+      yes|y) return 0 ;;
+      no|n)  return 1 ;;
       *) echo "  Invalid answer. Type yes/no (or Enter for [$default])." ;;
     esac
   done

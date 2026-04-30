@@ -56,6 +56,7 @@ Variables (all defined with their production-ready values in the example file):
 | `WHITELIST_SET_NAME` | `${SET_NAME}-allow` | ipset whitelist name |
 | `WHITELIST` | `()` (empty) | Array of always-allowed IPv4 addresses/CIDRs (see [Whitelist](#whitelist)) |
 | `WHITELIST_MIN_PREFIX` | `8` | Minimum WHITELIST prefix accepted (rejects /0 to /7 to prevent total bypass via typo). Set to 0 to disable. |
+| `BLOCKLIST_MIN_PREFIX` | `8` | Minimum prefix accepted from external blocklist sources (rejects /0 to /7). Catches a corrupted/malicious source injecting `0.0.0.0/0` which would lock out the whole server. Set to 0 to disable. |
 | `MIN_ENTRIES` | `1000` | Minimum entries threshold (anti-purge protection) |
 | `BASE_HASHSIZE` | `16384` | Base ipset hashsize |
 | `BASE_MAXELEM` | `300000` | Base ipset maxelem |
@@ -221,7 +222,7 @@ With the default `@reboot sleep 60 && update-blocklist.sh`, the vulnerable windo
 
 `setup-firewall.sh` versions before 2026-04-28 created the `inet admin_access input` nftables chain at priority `-10` (before the blocklist at priority 0). Result: on an nftables setup, blacklisted IPs still passed through on SAFE_PORTS (including SSH) because the admin_access `accept` evaluated before the blocklist `drop`.
 
-`setup-firewall.sh` automatically detects this buggy setup at startup and migrates the chain to priority `10` (after the blocklist), preserving the previously-opened ports. **Run `./setup-firewall.sh` once**; a `Migration : chaîne 'inet admin_access input' détectée à priorité -10` message confirms the fix. Other firewalls (iptables, ufw, firewalld) are not affected.
+`setup-firewall.sh` automatically detects this buggy setup at startup and migrates the chain to priority `10` (after the blocklist), preserving the previously-opened ports. **Run `./setup-firewall.sh` once**; a `Migration: 'inet admin_access input' chain detected at priority -10 (legacy bug).` message confirms the fix. Other firewalls (iptables, ufw, firewalld) are not affected.
 
 Verification:
 
@@ -520,6 +521,7 @@ Variables (toutes définies avec leur valeur prod-ready dans le fichier d'exempl
 | `WHITELIST_SET_NAME` | `${SET_NAME}-allow` | Nom du set ipset whitelist |
 | `WHITELIST` | `()` (vide) | Tableau d'IP/CIDR IPv4 toujours autorisés (voir [Whitelist](#whitelist-1)) |
 | `WHITELIST_MIN_PREFIX` | `8` | Préfixe minimum accepté en WHITELIST (rejette /0 à /7 pour éviter un bypass total par typo). Mettre à 0 pour désactiver. |
+| `BLOCKLIST_MIN_PREFIX` | `8` | Préfixe minimum accepté depuis les sources externes (rejette /0 à /7). Garde-fou contre une source corrompue ou malveillante qui injecterait `0.0.0.0/0`, ce qui verrouillerait l'accès au serveur entier. Mettre à 0 pour désactiver. |
 | `MIN_ENTRIES` | `1000` | Seuil minimum d'entrées (protection anti-purge) |
 | `BASE_HASHSIZE` | `16384` | Hashsize de base pour ipset |
 | `BASE_MAXELEM` | `300000` | Maxelem de base pour ipset |

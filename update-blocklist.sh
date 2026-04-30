@@ -123,6 +123,16 @@ if ! [[ "$WHITELIST_MIN_PREFIX" =~ ^[0-9]+$ ]] || [ "$WHITELIST_MIN_PREFIX" -lt 
   exit 1
 fi
 
+# --- BLOCKLIST_MIN_PREFIX validation (safeguard against overly broad source entries) ---
+# Rejects external blocklist entries with a prefix shorter than the threshold.
+# Default 8 prevents a corrupted/malicious source from injecting 0.0.0.0/0
+# (which ipset would normalise to "match any IP" -> total server lockout).
+: "${BLOCKLIST_MIN_PREFIX:=8}"
+if ! [[ "$BLOCKLIST_MIN_PREFIX" =~ ^[0-9]+$ ]] || [ "$BLOCKLIST_MIN_PREFIX" -lt 0 ] || [ "$BLOCKLIST_MIN_PREFIX" -gt 32 ]; then
+  echo "Error: BLOCKLIST_MIN_PREFIX invalid ('$BLOCKLIST_MIN_PREFIX'). Integer 0-32 expected." >&2
+  exit 1
+fi
+
 # --- LOG_LIMIT / LOG_BURST validation ---
 # Empty LOG_LIMIT = log everything (no rate-limit)
 if [ -n "$LOG_LIMIT" ]; then
@@ -320,16 +330,23 @@ _whitelist_or_cleanup_iptables() {
 }
 
 # --- Apply or clean up whitelist on firewalld (returns 0 if action taken) ---
+# $1: chain
+# $2: optional interface (used for DOCKER-USER to scope the ACCEPT to inbound
+#     traffic, mirroring _apply_whitelist_iptables). If empty, no -i is set
+#     (legacy behaviour; matches INPUT and existing rules without iface).
 _whitelist_or_cleanup_firewalld() {
   local chain="$1"
+  local iface="${2:-}"
+  local iface_args=()
+  [ -n "$iface" ] && iface_args=( -i "$iface" )
   if [ "${#WHITELIST[@]}" -gt 0 ]; then
-    if ! firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; then
-      firewall-cmd --permanent --direct --add-rule ipv4 filter "$chain" 0 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
+    if ! firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; then
+      firewall-cmd --permanent --direct --add-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
       return 0
     fi
   else
-    if firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; then
-      firewall-cmd --permanent --direct --remove-rule ipv4 filter "$chain" 0 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
+    if firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; then
+      firewall-cmd --permanent --direct --remove-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
       return 0
     fi
   fi
@@ -408,7 +425,7 @@ apply_firewall_rules() {
           need_reload=1
           log "firewalld DOCKER-USER rules added (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
         fi
-        _whitelist_or_cleanup_firewalld DOCKER-USER && need_reload=1
+        _whitelist_or_cleanup_firewalld DOCKER-USER "$WAN_INTERFACE" && need_reload=1
         docker_protected=1
       fi
       [ "$need_reload" -eq 1 ] && firewall-cmd --reload
@@ -439,9 +456,13 @@ $ufw_log_line\\
       grep -q "$wl_marker" /etc/ufw/before.rules 2>/dev/null && wl_present=1
       if [ "${#WHITELIST[@]}" -gt 0 ] && [ "$wl_present" -eq 0 ]; then
         cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
-        # Insert the ACCEPT rule just before the first ufw-before-input blocklist rule
-        sed -i "/-A ufw-before-input -m set --match-set $SET_NAME src/i\\
--A ufw-before-input -m set --match-set $WHITELIST_SET_NAME src -j ACCEPT" /etc/ufw/before.rules
+        # Insert the ACCEPT rule just before the FIRST ufw-before-input blocklist rule.
+        # The "0,/pattern/" range scopes the inner /pattern/i action to the first match
+        # only, otherwise sed would insert the ACCEPT before every matching rule (LOG + DROP).
+        sed -i "0,/-A ufw-before-input -m set --match-set $SET_NAME src/{
+/-A ufw-before-input -m set --match-set $SET_NAME src/i\\
+-A ufw-before-input -m set --match-set $WHITELIST_SET_NAME src -j ACCEPT
+}" /etc/ufw/before.rules
         ufw reload
         log "ufw whitelist rule added (ACCEPT)."
       elif [ "${#WHITELIST[@]}" -eq 0 ] && [ "$wl_present" -eq 1 ]; then
@@ -552,12 +573,13 @@ function is_bogon(addr) {
   sub(/[[:space:]]+$/, "", x);
   if (x == "") next;
 
-  # Validation + canonicalisation + bogon filter.
-  # allow_bogons=1 (via -v) for the whitelist: RFC1918 accepted (LAN management).
-  # Default allow_bogons=0: external sources strictly filtered.
+  # Validation + canonicalisation + bogon filter + min prefix safeguard.
+  # allow_bogons=1 (via -v) for the whitelist: RFC1918 accepted, prefix unchecked.
+  # min_prefix (via -v) rejects external entries with prefix < min_prefix
+  # (e.g. /0 from a corrupted source would otherwise match every IP).
   if (index(x, "/")) {
     split(x, t, "/");
-    if (valid_ipv4(t[1]) && valid_cidr(t[2]) && (allow_bogons || !is_bogon(t[1]))) print t[1] "/" t[2];
+    if (valid_ipv4(t[1]) && valid_cidr(t[2]) && (allow_bogons || (!is_bogon(t[1]) && t[2]+0 >= min_prefix))) print t[1] "/" t[2];
   } else {
     if (valid_ipv4(x) && (allow_bogons || !is_bogon(x))) print x "/32";
   }
@@ -565,7 +587,7 @@ function is_bogon(addr) {
 '
 
 for i in "${DL_OK[@]}"; do
-  awk "$AWK_PROG" "${TMP_DIR}/dl.${i}" > "${TMP_DIR}/src.${i}"
+  awk -v min_prefix="$BLOCKLIST_MIN_PREFIX" "$AWK_PROG" "${TMP_DIR}/dl.${i}" > "${TMP_DIR}/src.${i}"
   src_count="$(wc -l < "${TMP_DIR}/src.${i}")"
   if [ "$VERBOSE" -eq 1 ]; then
     log "  Source $((i+1))/${#URLS[@]}: $(fmt_num "$src_count") valid entries -- ${URLS[$i]}"

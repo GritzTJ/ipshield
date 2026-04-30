@@ -117,7 +117,7 @@ update-blocklist.sh [OPTIONS]
 | [GreenSnow](https://blocklist.greensnow.co/) | Brute-force SSH/HTTP actifs |
 | [Blocklist.de](https://www.blocklist.de/) | IP signalées (SSH, mail, web, FTP, etc.) |
 | [IPsum](https://github.com/stamparm/ipsum) | Agrégat de 30+ sources, IPs vues dans ≥3 listes |
-| [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Exits Tor (à retirer si tu acceptes le trafic Tor) |
+| [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Nœuds de sortie Tor |
 
 Sources personnalisables via la variable `URLS` dans `/etc/update-blocklist.conf`.
 
@@ -234,7 +234,7 @@ update-blocklist.sh [OPTIONS]
 | [GreenSnow](https://blocklist.greensnow.co/) | Active SSH/HTTP brute-force IPs |
 | [Blocklist.de](https://www.blocklist.de/) | Reported IPs (SSH, mail, web, FTP, etc.) |
 | [IPsum](https://github.com/stamparm/ipsum) | Aggregator of 30+ sources, IPs in ≥3 lists |
-| [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Tor exits (remove if you accept Tor traffic) |
+| [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Tor exit nodes |
 
 Sources are customisable via the `URLS` variable in `/etc/update-blocklist.conf`.
 

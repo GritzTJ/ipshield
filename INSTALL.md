@@ -71,7 +71,7 @@ Le script télécharge et agrège les listes suivantes :
 | [GreenSnow](https://blocklist.greensnow.co/) | Brute-force SSH/HTTP actifs |
 | [Blocklist.de](https://www.blocklist.de/) | IP signalées (SSH, mail, web, FTP, etc.) |
 | [IPsum](https://github.com/stamparm/ipsum) | Agrégat de 30+ sources, IPs vues dans ≥3 listes |
-| [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Exits Tor (à retirer si tu acceptes le trafic Tor) |
+| [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Nœuds de sortie Tor |
 
 Ces sources sont personnalisables via la variable `URLS` dans `/etc/update-blocklist.conf`.
 
@@ -156,7 +156,7 @@ Au prochain run, le script :
 
 > **Attention** : la règle ACCEPT contourne **l'ensemble du filtrage firewall**, pas seulement la blocklist. Une IP whitelistée a un accès complet au serveur, indépendamment des autres règles. À réserver aux IP/subnets de confiance.
 
-> **Garde-fou anti-typo** : par défaut, tout préfixe < `/8` est refusé (`WHITELIST_MIN_PREFIX=8`). Cela bloque le piège classique d'un `0.0.0.0/0` accidentel qui ouvrirait tout Internet en bypass total. Si tu as un besoin légitime de préfixe plus large, abaisse `WHITELIST_MIN_PREFIX` explicitement.
+> **Garde-fou anti-typo** : par défaut, tout préfixe < `/8` est refusé (`WHITELIST_MIN_PREFIX=8`). Cela bloque le piège classique d'un `0.0.0.0/0` accidentel qui ouvrirait tout Internet en bypass total. Pour autoriser un préfixe plus large, abaisser `WHITELIST_MIN_PREFIX` explicitement.
 
 ### Fenêtre de fail-open au reboot
 
@@ -260,7 +260,7 @@ Vérification après exécution :
 iptables -L DOCKER-USER -n -v
 ```
 
-Les règles LOG + DROP avec `match-set blacklist src` et `in ens160` (ou ton interface WAN) doivent apparaître.
+Les règles LOG + DROP avec `match-set blacklist src` et `in ens160` (ou l'interface WAN détectée) doivent apparaître.
 
 ## Automatisation (cron)
 
@@ -294,7 +294,7 @@ MAILTO=admin@exemple.fr
 
 ## Logs
 
-> **Installation recommandée** : `setup-firewall.sh` propose à la fin (étape 8) d'installer automatiquement le filtre rsyslog et les deux configs logrotate. Idempotent (rejouer ne ré-écrit que si différent). Les sections ci-dessous sont la procédure manuelle équivalente, à utiliser si tu préfères tout faire à la main.
+> **Installation recommandée** : `setup-firewall.sh` propose à la fin (étape 9) d'installer automatiquement le filtre rsyslog et les deux configs logrotate. Idempotent (rejouer ne ré-écrit que si différent). Les sections ci-dessous sont la procédure manuelle équivalente, pour une configuration manuelle.
 
 ### Logrotate du script
 

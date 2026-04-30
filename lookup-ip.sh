@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-# --- Usage / aide ---
+# --- Usage / help ---
 usage() {
   cat <<'EOF'
 Usage: lookup-ip.sh [OPTIONS] <adresse_ip>
@@ -26,7 +26,7 @@ EOF
   exit 0
 }
 
-# --- Parsing CLI ---
+# --- CLI parsing ---
 CLI_VERBOSE=""
 CONF_FILE="/etc/update-blocklist.conf"
 TARGET_IP=""
@@ -54,14 +54,14 @@ if [ -z "$TARGET_IP" ]; then
   exit 1
 fi
 
-# --- Initialisation des variables (les valeurs viennent du fichier de conf) ---
+# --- Variable initialisation (values come from the conf file) ---
 URLS=()
 VERBOSE=0
 
-# --- Source config file (REQUIS, sauf si non lisible par un user non-root) ---
-# Le fichier de conf (meme contenu que update-blocklist.sh) est la source de
-# verite unique. Pour un usage diagnostic depuis une machine sans ipshield,
-# l'utilisateur peut pointer -c vers une copie de update-blocklist.conf.example.
+# --- Source config file (REQUIRED, except if not readable by a non-root user) ---
+# The conf file (same content as update-blocklist.sh) is the single source of truth.
+# For diagnostic use from a machine without ipshield installed, point -c to a copy
+# of update-blocklist.conf.example.
 if [ ! -f "$CONF_FILE" ]; then
   echo "Erreur : fichier de configuration $CONF_FILE absent." >&2
   echo "Lance ./setup-firewall.sh pour l'installer, ou pointe -c vers une copie" >&2
@@ -69,7 +69,7 @@ if [ ! -f "$CONF_FILE" ]; then
   exit 1
 fi
 if [ "$(id -u)" -eq 0 ]; then
-  # Root : verifications de securite completes
+  # Root: full security checks
   conf_owner="$(stat -c '%u' "$CONF_FILE")"
   conf_perms="$(stat -c '%a' "$CONF_FILE")"
   if [ "$conf_owner" != "0" ]; then
@@ -88,27 +88,27 @@ fi
 # shellcheck source=/dev/null
 . "$CONF_FILE"
 
-# --- Validation des variables requises ---
+# --- Validate required variables ---
 if [ "${#URLS[@]}" -eq 0 ]; then
   echo "Erreur : URLS est vide ou non defini dans $CONF_FILE." >&2
   exit 1
 fi
 : "${SET_NAME:=blacklist}"
 
-# --- Appliquer overrides CLI ---
+# --- Apply CLI overrides ---
 [ -n "$CLI_VERBOSE" ] && VERBOSE=1
 
-# --- Whitelist set name (dérivé si non défini) ---
+# --- Whitelist set name (derived if undefined) ---
 : "${WHITELIST_SET_NAME:=${SET_NAME}-allow}"
 
-# --- Fonctions ---
+# --- Functions ---
 log() { echo "$*"; }
 err() { echo "$*" >&2; }
 
-# --- Validation IPv4 ---
+# --- IPv4 validation ---
 valid_ipv4() {
   local ip="$1"
-  # Format : 4 octets séparés par des points
+  # Format: 4 octets separated by dots
   if [[ ! "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     return 1
   fi
@@ -117,7 +117,7 @@ valid_ipv4() {
   set -- $ip
   local i
   for i in "$1" "$2" "$3" "$4"; do
-    # Pas de zéro padding (sauf "0" lui-même)
+    # No zero padding (except "0" itself)
     if [ "${#i}" -gt 1 ] && [ "${i:0:1}" = "0" ]; then
       return 1
     fi
@@ -133,12 +133,12 @@ if ! valid_ipv4 "$TARGET_IP"; then
   exit 1
 fi
 
-# --- Vérification dépendances ---
+# --- Dependency check ---
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { err "Erreur : commande manquante : $1"; exit 1; }; }
 need_cmd curl
 need_cmd awk
 
-# --- Nom de source à partir de l'URL ---
+# --- Source name from URL ---
 source_name() {
   local url="$1"
   local idx="$2"
@@ -157,7 +157,7 @@ source_name() {
   esac
 }
 
-# --- Répertoire temporaire ---
+# --- Temporary directory ---
 if [ "$(id -u)" -eq 0 ]; then
   TMP_DIR="$(mktemp -d -p /run "lookup-ip.XXXXXX")"
 else
@@ -166,7 +166,7 @@ fi
 cleanup() { rm -rf -- "$TMP_DIR" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
-# --- Programme AWK : extraction + validation IPv4/CIDR (identique à update-blocklist.sh) ---
+# --- AWK program: extraction + IPv4/CIDR validation (identical to update-blocklist.sh) ---
 AWK_PROG='
 function valid_ipv4(ip,   n,i,o) {
   n = split(ip, o, ".");
@@ -182,15 +182,14 @@ function valid_cidr(p) {
   if (p !~ /^[0-9]{1,2}$/) return 0;
   return (p+0 >= 0 && p+0 <= 32);
 }
-# Rejette les plages reservees (RFC 6890) qui ne devraient jamais apparaitre
-# dans une blocklist publique. Empeche un faux positif catastrophique
-# (ex : FireHOL Level 1 qui inclut les bogons par design) de bloquer le LAN
-# ou le bridge Docker.
+# Reject reserved ranges (RFC 6890) that should never appear in a public
+# blocklist. Prevents a catastrophic false positive (e.g. FireHOL Level 1
+# includes bogons by design) from blocking the LAN or the Docker bridge.
 function is_bogon(addr) {
   return (addr ~ /^(0\.|10\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.|127\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.(0\.(0|2)|168)\.|198\.(1[89]|51\.100)\.|203\.0\.113\.|22[4-9]\.|23[0-9]\.|24[0-9]\.|25[0-5]\.)/);
 }
 {
-  # Extraction : normaliser espaces, extraire premier champ commençant par un chiffre
+  # Extraction: normalise spaces, take the first field that starts with a digit
   gsub(/[[:space:]]+/, " ");
   sub(/^[[:space:]]+/, "");
   if ($0 !~ /^[0-9]/) next;
@@ -200,9 +199,9 @@ function is_bogon(addr) {
   sub(/[[:space:]]+$/, "", x);
   if (x == "") next;
 
-  # Validation + canonicalisation + filtrage bogons.
-  # allow_bogons=1 (via -v) pour la whitelist : RFC1918 accepte (LAN management).
-  # Par defaut allow_bogons=0 : sources externes strictement filtrees.
+  # Validation + canonicalisation + bogon filter.
+  # allow_bogons=1 (via -v) for the whitelist: RFC1918 accepted (LAN management).
+  # Default allow_bogons=0: external sources strictly filtered.
   if (index(x, "/")) {
     split(x, t, "/");
     if (valid_ipv4(t[1]) && valid_cidr(t[2]) && (allow_bogons || !is_bogon(t[1]))) print t[1] "/" t[2];
@@ -212,9 +211,9 @@ function is_bogon(addr) {
 }
 '
 
-# --- Programme AWK : matching CIDR ---
-# Vérifie si l'IP cible (passée via -v target=...) appartient à un des CIDR en entrée
-# Sortie : les entrées CIDR qui matchent
+# --- AWK program: CIDR matching ---
+# Checks whether the target IP (passed via -v target=...) falls within one of
+# the input CIDRs. Output: matching CIDR entries.
 CIDR_MATCH_PROG='
 function ip_to_int(ip,   o, n) {
   n = split(ip, o, ".");
@@ -234,14 +233,14 @@ BEGIN {
 }
 '
 
-# --- Options curl ---
+# --- curl options ---
 CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize 10485760 --retry 3 --retry-delay 2 --retry-all-errors )
 
-# --- Affichage ---
+# --- Output ---
 log "Recherche de $TARGET_IP dans ${#URLS[@]} listes de blocage..."
 echo ""
 
-# --- Test ipset (si root + ipset disponible) ---
+# --- ipset test (if root + ipset available) ---
 echo "--- Statut ipset ---"
 if [ "$(id -u)" -eq 0 ] && command -v ipset >/dev/null 2>&1; then
   if ! ipset list -n 2>/dev/null | awk -v s="$SET_NAME" '$0==s{found=1} END{exit(found?0:1)}'; then
@@ -264,14 +263,14 @@ else
 fi
 echo ""
 
-# --- Avertissement sources HTTP ---
+# --- HTTP source warning ---
 for url in "${URLS[@]}"; do
   if [[ "$url" =~ ^http:// ]]; then
     err "Avertissement : source HTTP (non chiffré) : $url"
   fi
 done
 
-# --- Téléchargements parallèles ---
+# --- Parallel downloads ---
 declare -a DL_PIDS=()
 for i in "${!URLS[@]}"; do
   curl "${CURL_OPTS[@]}" "${URLS[$i]}" -o "${TMP_DIR}/dl.${i}" 2>/dev/null &
@@ -293,7 +292,7 @@ if [ "${#DL_OK[@]}" -eq 0 ]; then
   exit 1
 fi
 
-# --- Recherche par source ---
+# --- Per-source search ---
 echo "--- Recherche par source ---"
 found_count=0
 total_checked=0
@@ -302,7 +301,7 @@ for i in "${!URLS[@]}"; do
   name="$(source_name "${URLS[$i]}" "$i")"
   padded_name="$(printf "%-18s" "$name")"
 
-  # Source en échec de téléchargement
+  # Failed-download source
   is_failed=0
   for f in "${DL_FAIL[@]}"; do
     if [ "$f" = "$i" ]; then
@@ -322,16 +321,16 @@ for i in "${!URLS[@]}"; do
   awk "$AWK_PROG" "${TMP_DIR}/dl.${i}" > "${TMP_DIR}/src.${i}"
   src_count="$(wc -l < "${TMP_DIR}/src.${i}")"
 
-  # Matching CIDR
+  # CIDR matching
   matches="$(awk -v target="$TARGET_IP" "$CIDR_MATCH_PROG" "${TMP_DIR}/src.${i}")"
 
   if [ -n "$matches" ]; then
     found_count=$((found_count + 1))
     if [ "$VERBOSE" -eq 1 ]; then
-      # Afficher chaque entrée CIDR correspondante
+      # Show each matching CIDR entry
       first_match="$(echo "$matches" | head -1)"
       echo "  ${padded_name}: TROUVÉ → ${first_match} (${src_count} entrées)"
-      # Si plusieurs matchs, afficher les suivants
+      # If multiple matches, show the rest
       rest="$(echo "$matches" | tail -n +2)"
       if [ -n "$rest" ]; then
         while IFS= read -r m; do
@@ -352,6 +351,6 @@ done
 
 echo ""
 
-# --- Résumé ---
+# --- Summary ---
 echo "--- Résumé ---"
 echo "  IP trouvée dans ${found_count}/${total_checked} source(s)."

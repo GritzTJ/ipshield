@@ -4,126 +4,9 @@
 
 *Automatic malicious IP blocking via ipset & Linux firewall*
 
-**[🇫🇷 Français](#français) · [🇬🇧 English](#english)**
+**[🇬🇧 English](#english) · [🇫🇷 Français](#français)**
 
 </div>
-
----
-
-<a id="français"></a>
-## 🇫🇷 Français
-
-### Description
-
-`ipshield` est un ensemble de scripts bash qui télécharge des listes publiques d'adresses IP malveillantes, les agrège dans un set ipset, et applique automatiquement les règles de blocage sur le firewall détecté.
-
-Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
-
-### Fonctionnalités
-
-- Agrège **10 listes publiques** de blocage IPv4 (Spamhaus DROP, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, Tor exit nodes)
-- Téléchargements **parallèles** avec retry et timeout
-- **Validation stricte** des IP/CIDR (programme awk fusionné) avec **filtre bogons RFC 6890** : rejette RFC1918, loopback, link-local, multicast, etc. (défense contre les sources qui les incluent par design comme FireHOL Level 1)
-- Mise à jour **atomique** via `ipset restore` + `swap` (zéro downtime)
-- **Détection automatique** du firewall actif
-- Application **idempotente** des règles LOG + DROP
-- **Support Docker** : protection automatique de la chaîne `DOCKER-USER` (conteneurs exposés), **filtrage entrée uniquement** scopé à l'interface WAN (pas de filtrage de l'egress des conteneurs)
-- **Whitelist** : IP/subnets toujours autorisés (ex: IP de management) via la variable `WHITELIST` en config
-- **Cron auto** : `setup-firewall.sh` propose la configuration du crontab (idempotent, MAILTO optionnel, sleep `@reboot` configurable)
-- **Conf auto** : `setup-firewall.sh` installe `/etc/update-blocklist.conf` depuis l'exemple si absent (chmod 600 root)
-- **Logs auto** : `setup-firewall.sh` propose aussi l'installation du filtre rsyslog (`BLOCKED:` → `/var/log/blocked-ips.log`) et des configs logrotate
-- **Désinstallation propre** (`uninstall.sh`) avec mode dry-run, confirmation, et retrait optionnel du crontab et des configs logs
-- **Seuil minimum** d'entrées (protection anti-purge)
-- Calcul **dynamique** de hashsize/maxelem
-- **Rapport de diff** : entrées ajoutées, retirées, inchangées
-- Mode **dry-run** et **verbose**
-- **Configuration externe** requise (`/etc/update-blocklist.conf`, source de vérité unique)
-- **Verrou** anti-concurrence (`flock`)
-- Logs vers stdout/stderr + **syslog**
-
-### Firewalls supportés
-
-| Firewall | Description |
-|---|---|
-| **iptables** | Classique, compatible partout |
-| **nftables** | Successeur d'iptables (règles via `iptables-nft`) |
-| **firewalld** | Gestion par zones, courant sur Fedora/RHEL |
-| **ufw** | Simple d'utilisation, courant sur Ubuntu |
-
-### Dépendances
-
-| Outil | Paquet (Debian) | Paquet (Fedora) |
-|---|---|---|
-| `curl` | curl | curl |
-| `awk` | gawk | gawk |
-| `ipset` | ipset | ipset |
-| `flock` | util-linux | util-linux |
-| `logger` | bsdutils | util-linux |
-| `sort`, `wc`, `date`, `comm` | coreutils | coreutils |
-
-### Installation
-
-```bash
-git clone https://github.com/GritzTJ/ipshield.git
-cd ipshield
-chmod 700 *.sh
-```
-
-### Utilisation
-
-```
-update-blocklist.sh [OPTIONS]
-```
-
-| Option | Description |
-|---|---|
-| `-n`, `--dry-run` | Mode simulation (aucune modification ipset/firewall) |
-| `-v`, `--verbose` | Affichage détaillé (stats par source, détails du diff) |
-| `-c`, `--config FILE` | Chemin du fichier de configuration |
-| `-h`, `--help` | Affiche l'aide |
-
-### Exemples
-
-```bash
-# Test en mode simulation
-./update-blocklist.sh --dry-run --verbose
-
-# Exécution réelle
-./update-blocklist.sh --verbose
-
-# Avec configuration personnalisée
-./update-blocklist.sh -c /etc/my-blocklist.conf -v
-```
-
-### Scripts
-
-| Script | Rôle |
-|---|---|
-| `update-blocklist.sh` | Mise à jour ipset + détection firewall + règles de blocage |
-| `setup-firewall.sh` | Installation interactive d'un firewall (one-shot) |
-| `lookup-ip.sh` | Recherche d'une IP dans les listes de blocage (diagnostic) |
-| `uninstall.sh` | Désinstallation propre (dry-run par défaut, `--apply` pour exécuter) |
-
-### Sources de blocage
-
-| Source | Description |
-|---|---|
-| [Spamhaus DROP](https://www.spamhaus.org/drop/) | Plages réseau détournées (hijack) |
-| [Emerging Threats](https://rules.emergingthreats.net/) | IP bloquées par règles ET |
-| [AbuseIPDB](https://github.com/borestad/blocklist-abuseipdb) | IP signalées avec un score de 100% sur 365 jours |
-| [CI Army (CINS)](https://cinsscore.com/) | IP à mauvais score de réputation |
-| [Data-Shield](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist) | Liste critique d'IP malveillantes |
-| [FireHOL Level 1](https://iplists.firehol.org/) | Méta-liste curée, faible faux-positif |
-| [GreenSnow](https://blocklist.greensnow.co/) | Brute-force SSH/HTTP actifs |
-| [Blocklist.de](https://www.blocklist.de/) | IP signalées (SSH, mail, web, FTP, etc.) |
-| [IPsum](https://github.com/stamparm/ipsum) | Agrégat de 30+ sources, IPs vues dans ≥3 listes |
-| [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Nœuds de sortie Tor |
-
-Sources personnalisables via la variable `URLS` dans `/etc/update-blocklist.conf`.
-
-### Installation complète
-
-Voir **[INSTALL.md](INSTALL.md)** pour le guide complet : prérequis, configuration, cronjob, setup firewall, logs et logrotate.
 
 ---
 
@@ -132,31 +15,21 @@ Voir **[INSTALL.md](INSTALL.md)** pour le guide complet : prérequis, configurat
 
 ### Description
 
-`ipshield` is a set of bash scripts that downloads public malicious IP lists, aggregates them into an ipset, and automatically applies blocking rules on the detected firewall.
+`ipshield` is a set of bash scripts that download public malicious IP lists, aggregate them into an ipset, and automatically apply blocking rules on the detected firewall.
 
 Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 
 ### Features
 
-- Aggregates **10 public** IPv4 blocklists (Spamhaus DROP, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, Tor exit nodes)
-- **Parallel** downloads with retry and timeout
-- **Strict validation** of IPs/CIDRs (single fused awk program) with **bogon filter** (RFC 6890): rejects RFC1918, loopback, link-local, multicast, etc. (defense against sources that include them by design like FireHOL Level 1)
-- **Atomic** updates via `ipset restore` + `swap` (zero downtime)
-- **Automatic detection** of the active firewall
-- **Idempotent** LOG + DROP rule application
-- **Docker support**: automatic `DOCKER-USER` chain protection (exposed containers), **inbound-only filtering** scoped to the WAN interface (no egress filtering)
-- **Whitelist**: always-allowed IPs/subnets (e.g. management IPs) via the `WHITELIST` config variable
-- **Cron setup**: `setup-firewall.sh` offers crontab configuration (idempotent, optional MAILTO, configurable `@reboot` sleep)
-- **Conf setup**: `setup-firewall.sh` installs `/etc/update-blocklist.conf` from the example if absent (chmod 600 root)
-- **Logging setup**: `setup-firewall.sh` also offers rsyslog filter (`BLOCKED:` → `/var/log/blocked-ips.log`) and logrotate configs
-- **Clean uninstall** (`uninstall.sh`) with dry-run, confirmation, and optional removal of crontab and logging configs
-- **Minimum threshold** of entries (anti-purge protection)
-- **Dynamic** hashsize/maxelem calculation
-- **Diff report**: added, removed, unchanged entries
-- **Dry-run** and **verbose** modes
-- Required **external configuration** (`/etc/update-blocklist.conf`, single source of truth)
-- **Concurrency lock** (`flock`)
-- Logs to stdout/stderr + **syslog**
+- **10 curated public IPv4 blocklists** aggregated into a single ipset (Spamhaus, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, Tor exits)
+- **RFC 6890 bogon filter**: rejects RFC1918, loopback, link-local, multicast and other reserved ranges from upstream sources to prevent self-blocking the LAN or Docker bridge
+- **Four supported firewalls**: iptables, nftables, firewalld, ufw — auto-detected and applied idempotently
+- **Docker-aware**: inbound-only protection of the `DOCKER-USER` chain, scoped to the WAN interface (container egress is never filtered)
+- **Whitelist** of trusted IPs/subnets (management, jump hosts) with prefix-width safeguard against accidental `0.0.0.0/0`
+- **Zero-downtime updates** via atomic ipset swap
+- **Guided setup**: `setup-firewall.sh` installs the firewall, configures the cron, drops the rsyslog filter and logrotate configs
+- **Clean uninstall** with dry-run preview and confirmation
+- **Single configuration file** (`/etc/update-blocklist.conf`) drives everything; no defaults hard-coded in scripts
 
 ### Supported Firewalls
 
@@ -241,3 +114,110 @@ Sources are customisable via the `URLS` variable in `/etc/update-blocklist.conf`
 ### Full Installation
 
 See **[INSTALL.md](INSTALL.md)** for the complete guide: prerequisites, configuration, cronjob, firewall setup, logs and logrotate.
+
+---
+
+<a id="français"></a>
+## 🇫🇷 Français
+
+### Description
+
+`ipshield` est un ensemble de scripts bash qui téléchargent des listes publiques d'adresses IP malveillantes, les agrègent dans un set ipset, et appliquent automatiquement les règles de blocage sur le firewall détecté.
+
+Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
+
+### Fonctionnalités
+
+- **10 listes publiques d'IPv4 malveillantes** agrégées dans un seul ipset (Spamhaus, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, nœuds de sortie Tor)
+- **Filtre des bogons RFC 6890** : rejette RFC1918, loopback, link-local, multicast et autres plages réservées issues des sources externes, afin d'éviter d'auto-bloquer le LAN ou le bridge Docker
+- **Quatre firewalls supportés** : iptables, nftables, firewalld, ufw — détection automatique et application idempotente des règles
+- **Compatible Docker** : protection de la chaîne `DOCKER-USER` en entrée uniquement, scopée à l'interface WAN (l'egress des conteneurs n'est jamais filtré)
+- **Whitelist** d'IP/subnets de confiance (management, bastions) avec garde-fou de préfixe pour empêcher un `0.0.0.0/0` accidentel
+- **Mise à jour sans interruption** par swap atomique d'ipset
+- **Installation guidée** : `setup-firewall.sh` installe le firewall, configure le cron, dépose le filtre rsyslog et les configs logrotate
+- **Désinstallation propre** avec mode dry-run et confirmation
+- **Fichier de configuration unique** (`/etc/update-blocklist.conf`) qui pilote l'ensemble ; aucun défaut codé en dur dans les scripts
+
+### Firewalls supportés
+
+| Firewall | Description |
+|---|---|
+| **iptables** | Classique, compatible partout |
+| **nftables** | Successeur d'iptables (règles via `iptables-nft`) |
+| **firewalld** | Gestion par zones, courant sur Fedora/RHEL |
+| **ufw** | Simple d'utilisation, courant sur Ubuntu |
+
+### Dépendances
+
+| Outil | Paquet (Debian) | Paquet (Fedora) |
+|---|---|---|
+| `curl` | curl | curl |
+| `awk` | gawk | gawk |
+| `ipset` | ipset | ipset |
+| `flock` | util-linux | util-linux |
+| `logger` | bsdutils | util-linux |
+| `sort`, `wc`, `date`, `comm` | coreutils | coreutils |
+
+### Installation
+
+```bash
+git clone https://github.com/GritzTJ/ipshield.git
+cd ipshield
+chmod 700 *.sh
+```
+
+### Utilisation
+
+```
+update-blocklist.sh [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `-n`, `--dry-run` | Mode simulation (aucune modification ipset/firewall) |
+| `-v`, `--verbose` | Affichage détaillé (stats par source, détails du diff) |
+| `-c`, `--config FILE` | Chemin du fichier de configuration |
+| `-h`, `--help` | Affiche l'aide |
+
+### Exemples
+
+```bash
+# Test en mode simulation
+./update-blocklist.sh --dry-run --verbose
+
+# Exécution réelle
+./update-blocklist.sh --verbose
+
+# Avec configuration personnalisée
+./update-blocklist.sh -c /etc/my-blocklist.conf -v
+```
+
+### Scripts
+
+| Script | Rôle |
+|---|---|
+| `update-blocklist.sh` | Mise à jour ipset + détection firewall + règles de blocage |
+| `setup-firewall.sh` | Installation interactive d'un firewall (one-shot) |
+| `lookup-ip.sh` | Recherche d'une IP dans les listes de blocage (diagnostic) |
+| `uninstall.sh` | Désinstallation propre (dry-run par défaut, `--apply` pour exécuter) |
+
+### Sources de blocage
+
+| Source | Description |
+|---|---|
+| [Spamhaus DROP](https://www.spamhaus.org/drop/) | Plages réseau détournées (hijack) |
+| [Emerging Threats](https://rules.emergingthreats.net/) | IP bloquées par règles ET |
+| [AbuseIPDB](https://github.com/borestad/blocklist-abuseipdb) | IP signalées avec un score de 100% sur 365 jours |
+| [CI Army (CINS)](https://cinsscore.com/) | IP à mauvais score de réputation |
+| [Data-Shield](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist) | Liste critique d'IP malveillantes |
+| [FireHOL Level 1](https://iplists.firehol.org/) | Méta-liste curée, faible faux-positif |
+| [GreenSnow](https://blocklist.greensnow.co/) | Brute-force SSH/HTTP actifs |
+| [Blocklist.de](https://www.blocklist.de/) | IP signalées (SSH, mail, web, FTP, etc.) |
+| [IPsum](https://github.com/stamparm/ipsum) | Agrégat de 30+ sources, IPs vues dans ≥3 listes |
+| [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Nœuds de sortie Tor |
+
+Sources personnalisables via la variable `URLS` dans `/etc/update-blocklist.conf`.
+
+### Installation complète
+
+Voir **[INSTALL.md](INSTALL.md)** pour le guide complet : prérequis, configuration, cronjob, setup firewall, logs et logrotate.

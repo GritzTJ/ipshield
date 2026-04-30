@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-# --- Usage / aide ---
+# --- Usage / help ---
 case "${1:-}" in
   -h|--help)
     cat <<'EOF'
@@ -19,7 +19,7 @@ EOF
     exit 0 ;;
 esac
 
-# --- Fonctions ---
+# --- Functions ---
 log() { echo "$*"; }
 err() { echo "ERREUR : $*" >&2; }
 
@@ -27,9 +27,9 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || { err "commande manquante : $1"; exit 1; }
 }
 
-# --- Prompt oui/non uniforme avec défaut ---
-# Usage : ask_yes_no "Question" oui|non
-# Retour : 0 si oui, 1 si non. Entrée vide = défaut. Réponse invalide = ré-interrogation.
+# --- Uniform yes/no prompt with default ---
+# Usage: ask_yes_no "Question" oui|non
+# Returns: 0 if yes, 1 if no. Empty input = default. Invalid input = re-ask.
 ask_yes_no() {
   local prompt="$1"
   local default="$2"
@@ -51,16 +51,16 @@ ask_yes_no() {
   done
 }
 
-# --- Vérification root ---
+# --- Root check ---
 if [ "$(id -u)" -ne 0 ]; then
   err "ce script doit être exécuté en tant que root."
   exit 1
 fi
 
-# --- Vérification dépendances ---
+# --- Dependency check ---
 need_cmd systemctl
 
-# --- Détection du gestionnaire de paquets ---
+# --- Package manager detection ---
 if command -v apt >/dev/null 2>&1; then
   PKG_MANAGER="apt"
 elif command -v dnf >/dev/null 2>&1; then
@@ -70,7 +70,7 @@ else
   exit 1
 fi
 
-# --- Détection du firewall actif ---
+# --- Active firewall detection ---
 detect_firewall() {
   if systemctl is-active --quiet firewalld 2>/dev/null; then
     echo "firewalld"
@@ -92,7 +92,7 @@ detect_firewall() {
   fi
 
   if command -v iptables >/dev/null 2>&1 && iptables -L -n 2>/dev/null | grep -q "^Chain"; then
-    # Ignorer les chaînes résiduelles de ufw si ufw est installé mais inactif
+    # Skip leftover ufw chains if ufw is installed but inactive
     if ! command -v ufw >/dev/null 2>&1 || ! iptables -L -n 2>/dev/null | grep -q "^Chain ufw-"; then
       echo "iptables"
       return
@@ -104,7 +104,7 @@ detect_firewall() {
 
 DETECTED="$(detect_firewall)"
 
-# --- Configuration du cron (prompt interactif idempotent) ---
+# --- Cron configuration (idempotent interactive prompt) ---
 configure_cron() {
   echo ""
   if ! ask_yes_no "Configurer le cron ipshield maintenant ?" oui; then
@@ -112,18 +112,18 @@ configure_cron() {
     return 0
   fi
 
-  # Vérification crontab disponible
+  # Check that crontab is available
   if ! command -v crontab >/dev/null 2>&1; then
     err "commande 'crontab' non disponible — installation cron à faire manuellement."
     return 0
   fi
 
-  # Lecture initiale du crontab (réutilisée pour défaut path + filtre).
-  # `|| true` : crontab -l retourne 1 si pas de crontab user → ne pas faire échouer set -e.
+  # Initial crontab read (reused for default path + filter).
+  # `|| true`: crontab -l returns 1 if no user crontab; do not let set -e exit.
   local current_cron
   current_cron="$(crontab -l 2>/dev/null || true)"
 
-  # Chemin par défaut : crontab existante > même répertoire que ce script
+  # Default path: existing crontab > same directory as this script
   local script_dir script_path log_path mailto reboot_delay existing_path
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   script_path="$script_dir/update-blocklist.sh"
@@ -160,7 +160,7 @@ configure_cron() {
     reboot_delay="$ans"
   fi
 
-  # Filtre les lignes ipshield existantes (par basename) + MAILTO si on en pose un nouveau
+  # Filter existing ipshield lines (by basename) + MAILTO if a new one is set
   local filtered_cron new_lines new_cron
   local script_basename mailto_drop
   script_basename="$(basename "$script_path")"
@@ -174,7 +174,7 @@ configure_cron() {
   ')"
   filtered_cron="${filtered_cron%$'\n'}"
 
-  # Nouvelles lignes
+  # New lines
   new_lines=""
   [ -n "$mailto" ] && new_lines+="MAILTO=$mailto"$'\n'
   new_lines+="0 */12 * * * $script_path >> $log_path 2>&1"$'\n'
@@ -184,7 +184,7 @@ configure_cron() {
     new_lines+="@reboot $script_path >> $log_path 2>&1"
   fi
 
-  # Concaténation
+  # Concatenation
   if [ -n "$filtered_cron" ]; then
     new_cron="${filtered_cron}"$'\n'"${new_lines}"
   else
@@ -213,9 +213,9 @@ configure_cron() {
   log "Crontab mis à jour."
 }
 
-# --- Helper : installe ou met à jour un fichier de config ---
-# Args: chemin, contenu attendu, description courte
-# Retour : 0 si modifié, 1 si pas de changement
+# --- Helper: install or update a config file ---
+# Args: path, expected content, short description
+# Returns: 0 if modified, 1 if no change
 _install_config() {
   local path="$1"
   local content="$2"
@@ -238,10 +238,10 @@ _install_config() {
   return 0
 }
 
-# --- Installation du fichier de configuration ---
-# /etc/update-blocklist.conf est requis par update-blocklist.sh. On le copie
-# depuis update-blocklist.conf.example si absent. Si present, on n'ecrase pas
-# (preserve les modifications du user).
+# --- Configuration file installation ---
+# /etc/update-blocklist.conf is required by update-blocklist.sh. Copied from
+# update-blocklist.conf.example when missing. If present, kept as-is to
+# preserve user modifications.
 configure_conf() {
   local conf_path="/etc/update-blocklist.conf"
   local script_dir
@@ -268,24 +268,24 @@ configure_conf() {
   log "  Configuration installee. Edite-la si besoin (whitelist, sources personnalisees, etc.)."
 }
 
-# --- Configuration des logs (rsyslog filter + logrotate) ---
+# --- Logs configuration (rsyslog filter + logrotate) ---
 configure_logs() {
   echo ""
 
-  # Détection rsyslog AVANT le prompt pour adapter le wording
+  # Detect rsyslog BEFORE the prompt to adapt wording
   local has_rsyslog=0
   if systemctl is-active --quiet rsyslog 2>/dev/null; then
     has_rsyslog=1
   fi
 
   if [ "$has_rsyslog" -eq 1 ]; then
-    # rsyslog actif : un seul prompt
+    # rsyslog active: single prompt
     if ! ask_yes_no "Configurer le filtre rsyslog + logrotate pour les logs ipshield ?" oui; then
       log "Logs non configurés. Pour le faire plus tard, relancez ./setup-firewall.sh."
       return 0
     fi
   else
-    # rsyslog absent : informer puis proposer install
+    # rsyslog absent: inform then propose install
     log "rsyslog n'est pas actif sur ce système."
     log "  - Avec rsyslog  : fichier dédié /var/log/blocked-ips.log avec rotation."
     log "  - Sans rsyslog  : logs dans journald, via 'journalctl -k --grep BLOCKED:'"
@@ -307,7 +307,7 @@ configure_logs() {
         log "Pour consulter les logs : journalctl -k --grep 'BLOCKED:'"
       fi
     else
-      # rsyslog refusé : proposer logrotate seul (utile pour /var/log/update-blocklist.log)
+      # rsyslog declined: offer logrotate alone (useful for /var/log/update-blocklist.log)
       if ! ask_yes_no "Installer quand même logrotate seul (sans filtre rsyslog) ?" oui; then
         log "Logs non configurés. Tu peux consulter les paquets bloqués via :"
         log "  journalctl -k --grep 'BLOCKED:'"
@@ -317,7 +317,7 @@ configure_logs() {
     fi
   fi
 
-  # Contenus attendus (alignés avec INSTALL.md)
+  # Expected contents (aligned with INSTALL.md)
   local rsyslog_content
   rsyslog_content='template(name="blockedFormat" type="string"
   string="%timestamp:::date-year%-%timestamp:::date-month%-%timestamp:::date-day% %timestamp:::date-hour%:%timestamp:::date-minute%:%timestamp:::date-second% %msg%\n")
@@ -367,16 +367,16 @@ configure_logs() {
   fi
 }
 
-# --- Migration : ancien bug de priorité de la chaîne nftables admin_access ---
-# Avant ce fix, la chaîne 'inet admin_access input' était créée à priorité -10
-# (avant le blocklist à priorité 0). Conséquence : sur nftables, les IPs
-# blacklistées passaient quand même sur les ports SSH/SAFE_PORTS car le accept
-# de admin_access s'évaluait avant le drop du blocklist.
-# La priorité doit être positive pour que le blocklist drop s'applique d'abord.
+# --- Migration: legacy nftables admin_access chain priority bug ---
+# Before this fix, the 'inet admin_access input' chain was created at priority -10
+# (before the blocklist at priority 0). Result: on nftables, blacklisted IPs still
+# passed on SSH/SAFE_PORTS because the admin_access accept evaluated before the
+# blocklist drop. Priority must be positive so the blocklist drop applies first.
 if command -v nft >/dev/null 2>&1; then
-  # Le pattern matche les deux formes : "priority -10" et "priority filter - 10"
-  # (nftables canonicalise selon la version : raw int sur ancienne, named+offset sur récente).
-  # Le ";" final ancre la valeur pour éviter de matcher -100, -101, etc.
+  # The pattern matches both forms: "priority -10" and "priority filter - 10"
+  # (nftables canonicalises depending on the version: raw int on older,
+  # named+offset on newer). The trailing ";" anchors the value so we don't
+  # match -100, -101, etc.
   if nft list chain inet admin_access input 2>/dev/null | grep -qE "priority [^;]*-[[:space:]]*10[[:space:]]*;"; then
     log "Migration : chaîne 'inet admin_access input' détectée à priorité -10 (ancien bug)."
     existing_ports="$(nft list chain inet admin_access input 2>/dev/null \
@@ -394,7 +394,7 @@ if command -v nft >/dev/null 2>&1; then
   fi
 fi
 
-# --- Affichage résultat détection ---
+# --- Detection result display ---
 echo ""
 if [ "$DETECTED" = "aucun" ]; then
   log "Aucun firewall actif détecté sur ce système."
@@ -402,7 +402,7 @@ else
   log "Firewall actif détecté : $DETECTED"
 fi
 
-# --- Menu de sélection ---
+# --- Selection menu ---
 echo ""
 log "Choisissez le firewall à installer et activer :"
 echo ""
@@ -435,7 +435,7 @@ case "$choix" in
   *) err "choix invalide : $choix"; exit 1 ;;
 esac
 
-# --- Vérifier si déjà actif ---
+# --- Check if already active ---
 if [ "$FIREWALL" = "$DETECTED" ]; then
   echo ""
   log "$FIREWALL est déjà actif sur ce système (pas de transition nécessaire)."
@@ -448,9 +448,9 @@ fi
 echo ""
 log "Installation et activation de : $FIREWALL"
 
-# --- Détection des ports TCP en écoute (non-loopback) ---
-# Permet de pré-remplir la liste des ports à autoriser avant activation
-# du nouveau firewall, pour éviter de couper des services exposés.
+# --- Listening TCP ports detection (non-loopback) ---
+# Pre-fills the list of ports to allow before activating the new firewall,
+# to avoid breaking exposed services.
 detect_listening_ports() {
   if ! command -v ss >/dev/null 2>&1; then
     return 0
@@ -462,13 +462,13 @@ detect_listening_ports() {
       n = split(addr_port, parts, ":")
       port = parts[n]
       addr = substr(addr_port, 1, length(addr_port) - length(port) - 1)
-      # Skip loopback (IPv4 127.0.0.0/8 et IPv6 [::1])
+      # Skip loopback (IPv4 127.0.0.0/8 and IPv6 [::1])
       if (addr == "[::1]" || addr ~ /^127\./) next
       if (port !~ /^[0-9]+$/) next
       proc = "?"
       for (i = 1; i <= NF; i++) {
         if (match($i, /\("[^"]+"/)) {
-          # RLENGTH inclut ("...") → on retire 3 (les 2 premiers caractères et le " final)
+          # RLENGTH includes ("..."), drop 3 chars (first 2 and trailing ")
           proc = substr($i, RSTART+2, RLENGTH-3)
           break
         }
@@ -494,12 +494,12 @@ else
   read -rp "Ports à ouvrir avant activation (séparés par espaces, vide pour passer) : " SAFE_PORTS
 fi
 
-# Gestion du refus explicite
+# Handle explicit refusal
 if [ "$SAFE_PORTS" = "non" ] || [ "$SAFE_PORTS" = "no" ] || [ "$SAFE_PORTS" = "n" ]; then
   SAFE_PORTS=""
 fi
 
-# Validation : chaque port doit être 1-65535, puis dédup + tri
+# Validation: each port must be 1-65535, then dedup + sort
 if [ -n "$SAFE_PORTS" ]; then
   for p in $SAFE_PORTS; do
     if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
@@ -510,10 +510,10 @@ if [ -n "$SAFE_PORTS" ]; then
   SAFE_PORTS="$(echo "$SAFE_PORTS" | tr ' ' '\n' | sort -un | tr '\n' ' ' | sed 's/ *$//')"
 fi
 
-# --- Rollback automatique en cas d'échec ---
-# Si le script échoue entre la désactivation de l'ancien firewall et
-# l'activation du nouveau, le serveur resterait sans protection.
-# Le trap réactive l'ancien firewall en cas d'erreur ou d'interruption.
+# --- Automatic rollback on failure ---
+# If the script fails between deactivating the old firewall and activating
+# the new one, the server would be left unprotected. The trap reactivates
+# the previous firewall on error or interruption.
 rollback() {
   if [ "${ROLLBACK_ARMED:-0}" -eq 1 ]; then
     err "échec détecté — tentative de réactivation de $DETECTED..."
@@ -543,7 +543,7 @@ rollback() {
 }
 trap rollback EXIT INT TERM
 
-# --- Désactiver l'ancien firewall ---
+# --- Deactivate old firewall ---
 if [ "$DETECTED" != "aucun" ]; then
   ROLLBACK_ARMED=1
   log "Désactivation de l'ancien firewall : $DETECTED"
@@ -560,7 +560,7 @@ if [ "$DETECTED" != "aucun" ]; then
       systemctl disable nftables
       ;;
     iptables)
-      # Sauvegarde des règles avant flush (pour rollback en cas d'échec)
+      # Backup rules before flush (for rollback on failure)
       IPTABLES_BACKUP="$(mktemp)"
       iptables-save > "$IPTABLES_BACKUP"
       for table in filter nat mangle raw; do
@@ -581,13 +581,13 @@ if [ "$DETECTED" != "aucun" ]; then
   log "$DETECTED désactivé."
 fi
 
-# --- Installer le nouveau firewall ---
+# --- Install new firewall ---
 log "Installation du paquet $FIREWALL..."
 if [ "$PKG_MANAGER" = "apt" ]; then
   apt update -qq
 fi
-# `ipset` est installé en même temps que le firewall (dépendance d'update-blocklist.sh,
-# souvent absente sur Debian minimal et causerait sinon "commande manquante: ipset").
+# `ipset` is installed alongside the firewall (dependency of update-blocklist.sh,
+# often missing on minimal Debian, would otherwise cause "commande manquante: ipset").
 case "$FIREWALL" in
   iptables)
     if [ "$PKG_MANAGER" = "apt" ]; then
@@ -619,7 +619,7 @@ case "$FIREWALL" in
     ;;
 esac
 
-# --- Activer et démarrer le nouveau firewall ---
+# --- Enable and start the new firewall ---
 log "Activation de $FIREWALL..."
 case "$FIREWALL" in
   iptables)
@@ -639,8 +639,8 @@ case "$FIREWALL" in
     systemctl start nftables
     if [ -n "$SAFE_PORTS" ]; then
       nft add table inet admin_access 2>/dev/null || true
-      # Priorité 10 (POSITIVE, après le blocklist à priorité 0) : si une IP est
-      # blacklistée, elle est droppée par le blocklist AVANT d'arriver à ce ACCEPT.
+      # Priority 10 (POSITIVE, after the blocklist at priority 0): if an IP is
+      # blacklisted, it is dropped by the blocklist BEFORE reaching this ACCEPT.
       nft add chain inet admin_access input '{ type filter hook input priority 10 ; policy accept ; }' 2>/dev/null || true
       for p in $SAFE_PORTS; do
         nft add rule inet admin_access input tcp dport "$p" accept
@@ -670,9 +670,9 @@ case "$FIREWALL" in
     ;;
 esac
 
-# --- Vérification post-activation : le firewall répond-il ? ---
-# Si la vérification échoue, on quitte avec une erreur — le trap rollback
-# ré-activera l'ancien firewall (ROLLBACK_ARMED toujours à 1).
+# --- Post-activation verification: is the firewall responding? ---
+# If the check fails, we exit with an error; the rollback trap will re-enable
+# the old firewall (ROLLBACK_ARMED is still 1).
 log "Vérification de l'état du firewall..."
 case "$FIREWALL" in
   iptables)
@@ -703,7 +703,7 @@ case "$FIREWALL" in
 esac
 log "$FIREWALL est opérationnel."
 
-# Désarmer le rollback — le nouveau firewall est actif
+# Disarm the rollback - the new firewall is active
 ROLLBACK_ARMED=0
 rm -f "${IPTABLES_BACKUP:-}" "${IPTABLES_BACKUP6:-}" 2>/dev/null || true
 trap - EXIT INT TERM

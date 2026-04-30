@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-# --- Usage / aide ---
+# --- Usage / help ---
 usage() {
   cat <<'EOF'
 Usage: uninstall.sh [OPTIONS]
@@ -27,13 +27,13 @@ EOF
   exit 0
 }
 
-# --- Vérification root ---
+# --- Root check ---
 if [ "$(id -u)" -ne 0 ]; then
   echo "Erreur : ce script doit être exécuté en tant que root." >&2
   exit 1
 fi
 
-# --- Parsing CLI ---
+# --- CLI parsing ---
 APPLY=0
 CONF_FILE="/etc/update-blocklist.conf"
 
@@ -48,10 +48,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# --- Valeurs par défaut ---
+# --- Defaults ---
 SET_NAME="blacklist"
 
-# --- Source config (mêmes vérifs que update-blocklist.sh) ---
+# --- Source config (same checks as update-blocklist.sh) ---
 if [ -f "$CONF_FILE" ]; then
   conf_owner="$(stat -c '%u' "$CONF_FILE")"
   conf_perms="$(stat -c '%a' "$CONF_FILE")"
@@ -67,7 +67,7 @@ if [ -f "$CONF_FILE" ]; then
   . "$CONF_FILE"
 fi
 
-# Validation SET_NAME
+# SET_NAME validation
 if [[ ! "$SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
   echo "Erreur : SET_NAME invalide ('$SET_NAME')." >&2
   exit 1
@@ -78,10 +78,10 @@ if [[ ! "$WHITELIST_SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
   exit 1
 fi
 
-# --- Verrou partagé avec update-blocklist.sh (anti-race contre cron) ---
-# Sans ce lock, un cron de update-blocklist.sh pourrait re-créer les règles
-# entre le retrait par uninstall et la destruction des ipsets, laissant un
-# état partiellement installé.
+# --- Lock shared with update-blocklist.sh (anti-race against cron) ---
+# Without this lock, an update-blocklist.sh cron run could re-create the rules
+# between uninstall removing them and destroying the ipsets, leaving a
+# partially-installed state.
 LOCK_DIR="/run/lock"
 LOCK_FILE="${LOCK_DIR}/${SET_NAME}.lock"
 mkdir -p "$LOCK_DIR"
@@ -91,13 +91,13 @@ if ! flock -n 9; then
   exit 1
 fi
 
-# --- Fonctions ---
+# --- Functions ---
 log() { echo "$*"; }
 err() { echo "$*" >&2; }
 
-# --- Prompt oui/non uniforme avec défaut ---
-# Usage : ask_yes_no "Question" oui|non
-# Retour : 0 si oui, 1 si non. Entrée vide = défaut. Réponse invalide = ré-interrogation.
+# --- Uniform yes/no prompt with default ---
+# Usage: ask_yes_no "Question" oui|non
+# Returns: 0 if yes, 1 if no. Empty input = default. Invalid input = re-ask.
 ask_yes_no() {
   local prompt="$1"
   local default="$2"
@@ -125,7 +125,7 @@ else
   PREFIX="[DRY-RUN] "
 fi
 
-# --- Détection firewall ---
+# --- Firewall detection ---
 detect_firewall() {
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet firewalld 2>/dev/null; then
     echo "firewalld"; return
@@ -151,7 +151,7 @@ detect_docker() {
   iptables -L DOCKER-USER -n >/dev/null 2>&1
 }
 
-# --- Comptage des règles ipshield présentes (iptables) ---
+# --- Count ipshield rules present (iptables) ---
 count_iptables_rules() {
   local chain="$1"
   local total=0
@@ -161,7 +161,7 @@ count_iptables_rules() {
   echo "$total"
 }
 
-# --- Suppression iptables (idempotent, retire toutes les occurrences) ---
+# --- iptables removal (idempotent, removes all occurrences) ---
 remove_iptables_rules() {
   local chain="$1"
   # Whitelist ACCEPT
@@ -172,7 +172,7 @@ remove_iptables_rules() {
   while iptables -C "$chain" -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; do
     iptables -D "$chain" -m set --match-set "$SET_NAME" src -j DROP
   done
-  # Blacklist LOG : suppression générique (n'importe quelles valeurs limit)
+  # Blacklist LOG: generic removal (any limit values)
   local rule
   while true; do
     rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A $chain .*--match-set $SET_NAME src.*-j LOG --log-prefix \"BLOCKED: \"" | head -1 || true)"
@@ -182,7 +182,7 @@ remove_iptables_rules() {
   done
 }
 
-# --- Suppression firewalld --direct (générique : matche n'importe quelles valeurs limit) ---
+# --- firewalld --direct removal (generic: matches any limit values) ---
 remove_firewalld_rules() {
   local chain="$1"
   local changed=0
@@ -198,13 +198,13 @@ remove_firewalld_rules() {
   [ "$changed" -eq 1 ] && return 0 || return 1
 }
 
-# --- Affichage des règles ipshield présentes ---
+# --- Display existing ipshield rules ---
 show_iptables_rules() {
   local chain="$1"
   iptables -S "$chain" 2>/dev/null | grep -E -- "--match-set ($SET_NAME|$WHITELIST_SET_NAME) src" || true
 }
 
-# --- Détection firewall et plan d'action ---
+# --- Firewall detection and action plan ---
 FW="$(detect_firewall)"
 log "Firewall détecté : $FW"
 
@@ -305,7 +305,7 @@ fi
 
 echo ""
 
-# --- Mode dry-run : sortir ici ---
+# --- Dry-run mode: exit here ---
 if [ "$APPLY" -eq 0 ]; then
   log "[DRY-RUN] Pour appliquer réellement : relancez avec --apply"
   exit 0
@@ -317,7 +317,7 @@ if ! ask_yes_no "Confirmer la désinstallation ?" non; then
   exit 0
 fi
 
-# --- Application ---
+# --- Apply ---
 log "Suppression des règles..."
 case "$FW" in
   iptables|nftables)
@@ -362,7 +362,7 @@ for set in "$SET_NAME" "$WHITELIST_SET_NAME"; do
   fi
 done
 
-# --- Retrait optionnel des lignes cron ---
+# --- Optional cron line removal ---
 if command -v crontab >/dev/null 2>&1; then
   current_cron="$(crontab -l 2>/dev/null || true)"
   ipshield_lines="$(printf '%s\n' "$current_cron" | grep -E "update-blocklist\.sh" || true)"
@@ -386,7 +386,7 @@ if command -v crontab >/dev/null 2>&1; then
   fi
 fi
 
-# Lignes cron dans /etc/crontab et /etc/cron.d/* (info uniquement, jamais modifié)
+# Cron lines in /etc/crontab and /etc/cron.d/* (info only, never modified)
 other_cron="$(grep -lE "update-blocklist\.sh" /etc/crontab /etc/cron.d/* 2>/dev/null || true)"
 if [ -n "$other_cron" ]; then
   echo ""
@@ -394,7 +394,7 @@ if [ -n "$other_cron" ]; then
   echo "$other_cron" | awk '{print "    " $0}'
 fi
 
-# --- Retrait optionnel des configs rsyslog + logrotate ---
+# --- Optional rsyslog + logrotate config removal ---
 log_configs=(/etc/rsyslog.d/30-blocked-ips.conf /etc/logrotate.d/update-blocklist /etc/logrotate.d/blocked-ips)
 present_log_configs=()
 for f in "${log_configs[@]}"; do

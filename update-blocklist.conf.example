@@ -1,14 +1,14 @@
-# Configuration pour update-blocklist.sh
-# Copier vers /etc/update-blocklist.conf et adapter si besoin.
-# setup-firewall.sh fait la copie automatiquement si /etc/update-blocklist.conf
-# est absent.
-# Permissions requises : appartenir a root, pas de group/world-writable.
+# Configuration for update-blocklist.sh
+# Copy to /etc/update-blocklist.conf and adjust as needed.
+# setup-firewall.sh copies this file automatically when /etc/update-blocklist.conf
+# is missing.
+# Required permissions: owned by root, not group/world-writable.
 #
-# CE FICHIER EST LA SOURCE DE VERITE de la configuration ipshield.
-# Les valeurs ci-dessous sont les defauts prod-ready ; modifier au besoin.
+# THIS FILE IS THE SINGLE SOURCE OF TRUTH for ipshield configuration.
+# Values below are production-ready defaults; change as needed.
 
-# --- Listes de blocage ---
-# Tableau des URLs telechargees en parallele.
+# --- Blocklist sources ---
+# URLs downloaded in parallel.
 URLS=(
   "https://raw.githubusercontent.com/duggytuxy/Data-Shield_IPv4_Blocklist/refs/heads/main/prod_critical_data-shield_ipv4_blocklist.txt"
   "https://www.spamhaus.org/drop/drop.txt"
@@ -22,22 +22,22 @@ URLS=(
   "https://check.torproject.org/torbulkexitlist"
 )
 
-# --- Nom du set ipset ---
-# Caracteres autorises : [a-zA-Z0-9_-]
+# --- ipset blacklist name ---
+# Allowed characters: [a-zA-Z0-9_-]
 SET_NAME="blacklist"
 
-# --- Nom du set ipset whitelist ---
-# Par defaut : "${SET_NAME}-allow" (ex: "blacklist-allow").
-# Caracteres autorises : [a-zA-Z0-9_-], doit etre different de SET_NAME.
+# --- ipset whitelist name ---
+# Default: "${SET_NAME}-allow" (e.g. "blacklist-allow").
+# Allowed characters: [a-zA-Z0-9_-], must differ from SET_NAME.
 WHITELIST_SET_NAME="${SET_NAME}-allow"
 
-# --- Whitelist : IP ou subnets toujours autorises (bypass blocklist + tout le firewall) ---
-# Format : tableau d'adresses IPv4 ou CIDR (notation x.y.z.w ou x.y.z.w/N).
-# Une regle iptables ACCEPT est inseree en position 1 sur INPUT (et DOCKER-USER si present).
-# ATTENTION : les IP listees ici contournent l'ensemble du filtrage firewall, pas
-# uniquement la blocklist. A reserver aux IP/subnets de management de confiance.
-# Si la liste est vide ou commentee, l'ipset whitelist et la regle ACCEPT sont
-# automatiquement supprimes au prochain run.
+# --- Whitelist: always-allowed IPs or subnets (bypass blocklist + entire firewall) ---
+# Format: array of IPv4 addresses or CIDRs (x.y.z.w or x.y.z.w/N notation).
+# An iptables ACCEPT rule is inserted at position 1 on INPUT (and DOCKER-USER if present).
+# WARNING: listed IPs bypass the entire firewall filtering, not only the blocklist.
+# Reserve for trusted management IPs/subnets.
+# If the list is empty or commented out, the whitelist ipset and ACCEPT rule
+# are automatically removed on the next run.
 #WHITELIST=(
 #  "10.0.0.0/8"
 #  "172.16.0.0/12"
@@ -45,43 +45,43 @@ WHITELIST_SET_NAME="${SET_NAME}-allow"
 #  "203.0.113.42"
 #)
 
-# --- Garde-fou contre les prefixes trop larges en WHITELIST ---
-# Refuse toute entree de la WHITELIST dont le prefixe est < WHITELIST_MIN_PREFIX.
-# Defaut : 8 (rejette /0 a /7 = au-dela de 16M IPs autorisees, potentiellement
-# une typo qui ouvrirait le serveur a tout Internet). Mettre a 0 pour desactiver
-# le garde-fou (deconseille).
+# --- Safeguard against overly broad WHITELIST prefixes ---
+# Rejects any WHITELIST entry whose prefix is < WHITELIST_MIN_PREFIX.
+# Default: 8 (rejects /0 to /7 = beyond 16M allowed IPs, potentially a typo
+# that would open the server to the entire Internet). Set to 0 to disable
+# the safeguard (not recommended).
 WHITELIST_MIN_PREFIX=8
 
-# --- Seuil minimum d'entrees ---
-# Si le nombre d'entrees valides est inferieur a ce seuil, le script
-# refuse la mise a jour (protection contre une source vide ou corrompue).
+# --- Minimum entries threshold ---
+# If the number of valid entries is below this threshold, the script
+# refuses the update (protection against an empty or corrupt source).
 MIN_ENTRIES=1000
 
-# --- Parametres ipset ---
-# Valeurs de base pour hashsize et maxelem.
-# Le script ajuste dynamiquement si le nombre d'entrees depasse ces valeurs.
+# --- ipset parameters ---
+# Base values for hashsize and maxelem.
+# The script adjusts dynamically when the entry count exceeds these values.
 BASE_HASHSIZE=16384
 BASE_MAXELEM=300000
 
-# --- Rate-limit du logging des paquets bloques ---
-# LOG_LIMIT : taux maximum de logs ("N/sec", "N/min", "N/hour", "N/day").
-#             Vide = pas de rate-limit (loggue tout). Risque de saturer
-#             /var/log sous attaque massive.
-# LOG_BURST : nombre max de logs en burst avant que le rate-limit s'applique.
-#             Doit etre un entier positif si LOG_LIMIT est non vide.
-# Defauts : 60/min et 100 (sans risque de flood, perd des details sous attaque massive).
-# Drift : si tu modifies ces valeurs apres install, iptables/nftables/DOCKER-USER
-#         sont mis a jour automatiquement au prochain run. Pour ufw (before.rules)
-#         et firewalld (--direct), il faut uninstall.sh --apply puis re-installer.
+# --- Rate-limit for blocked-packet logging ---
+# LOG_LIMIT: maximum log rate ("N/sec", "N/min", "N/hour", "N/day").
+#            Empty = no rate-limit (logs everything). Risk of saturating
+#            /var/log under heavy attack.
+# LOG_BURST: maximum burst before LOG_LIMIT applies.
+#            Must be a positive integer if LOG_LIMIT is non-empty.
+# Defaults: 60/min and 100 (no flood risk, loses detail under heavy attack).
+# Drift: changing these values after install updates iptables/nftables/DOCKER-USER
+#        automatically on the next run. For ufw (before.rules) and firewalld
+#        (--direct), uninstall.sh --apply then reinstall is required.
 LOG_LIMIT="60/min"
 LOG_BURST=100
 
-# --- Interface WAN (pour la regle DOCKER-USER) ---
-# Sur la chaine DOCKER-USER, on ne bloque que le trafic ENTRANT depuis Internet
-# vers les conteneurs (paquets arrivant sur l'interface WAN).
-# Le trafic SORTANT des conteneurs (qui passe par le bridge Docker br-xxx)
-# n'est jamais filtre par la blocklist, conformement au principe "filtrer
-# uniquement l'entree".
-# Vide = auto-detection via "ip route get 8.8.8.8".
-# A definir explicitement si l'auto-detection donne le mauvais resultat (ex: VPN).
+# --- WAN interface (for the DOCKER-USER rule) ---
+# On the DOCKER-USER chain, only INBOUND traffic from the Internet to
+# containers is filtered (packets arriving on the WAN interface).
+# OUTBOUND traffic from containers (going through the Docker bridge br-xxx)
+# is never filtered by the blocklist, in line with the "filter inbound only"
+# principle.
+# Empty = auto-detect via "ip route get 8.8.8.8".
+# Set explicitly if auto-detection picks the wrong interface (e.g. VPN).
 WAN_INTERFACE=""

@@ -313,6 +313,7 @@ Create `/etc/logrotate.d/update-blocklist`:
 ```bash
 cat > /etc/logrotate.d/update-blocklist << 'EOF'
 /var/log/update-blocklist.log {
+	su root root
 	rotate 4
 	weekly
 	missingok
@@ -322,6 +323,8 @@ cat > /etc/logrotate.d/update-blocklist << 'EOF'
 }
 EOF
 ```
+
+> The `su root root` directive is required by logrotate >= 3.18 because `/var/log/` is owned by `root:syslog` (group-writable) on Debian/Ubuntu. Without it, rotation is silently skipped on stricter setups. Standard pattern, also used by `/etc/logrotate.d/ubuntu-pro-client`.
 
 #### Blocked-IP logs
 
@@ -378,6 +381,7 @@ Create `/etc/logrotate.d/blocked-ips`:
 ```bash
 cat > /etc/logrotate.d/blocked-ips << 'EOF'
 /var/log/blocked-ips.log {
+	su root root
 	rotate 4
 	weekly
 	missingok
@@ -773,6 +777,7 @@ Créer le fichier `/etc/logrotate.d/update-blocklist` :
 ```bash
 cat > /etc/logrotate.d/update-blocklist << 'EOF'
 /var/log/update-blocklist.log {
+	su root root
 	rotate 4
 	weekly
 	missingok
@@ -782,6 +787,8 @@ cat > /etc/logrotate.d/update-blocklist << 'EOF'
 }
 EOF
 ```
+
+> La directive `su root root` est requise par logrotate >= 3.18 car `/var/log/` appartient à `root:syslog` (group-writable) sur Debian/Ubuntu. Sans elle, la rotation est silencieusement ignorée sur les setups plus stricts. Pattern standard, aussi utilisé par `/etc/logrotate.d/ubuntu-pro-client`.
 
 #### Logs des IP bloquées
 
@@ -838,6 +845,7 @@ Créer le fichier `/etc/logrotate.d/blocked-ips` :
 ```bash
 cat > /etc/logrotate.d/blocked-ips << 'EOF'
 /var/log/blocked-ips.log {
+	su root root
 	rotate 4
 	weekly
 	missingok

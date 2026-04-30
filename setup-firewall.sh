@@ -325,8 +325,13 @@ configure_logs() {
 :msg, contains, "BLOCKED: " /var/log/blocked-ips.log;blockedFormat
 & stop'
 
+  # 'su root root' is required by logrotate >= 3.18 when /var/log is owned
+  # by root:syslog (Debian/Ubuntu default 775). Without it, rotation is
+  # silently skipped on stricter setups. Standard pattern, also used by
+  # /etc/logrotate.d/ubuntu-pro-client.
   local logrotate_app_content
   logrotate_app_content='/var/log/update-blocklist.log {
+	su root root
 	rotate 4
 	weekly
 	missingok
@@ -337,6 +342,7 @@ configure_logs() {
 
   local logrotate_blocked_content
   logrotate_blocked_content='/var/log/blocked-ips.log {
+	su root root
 	rotate 4
 	weekly
 	missingok

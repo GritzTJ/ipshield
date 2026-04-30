@@ -101,6 +101,16 @@ fi
 # --- Whitelist set name (derived if undefined) ---
 : "${WHITELIST_SET_NAME:=${SET_NAME}-allow}"
 
+# --- BLOCKLIST_MIN_PREFIX default + validation ---
+# Same safeguard as update-blocklist.sh: an external CIDR with prefix shorter
+# than this threshold would never end up in the ipset, so don't report it as a
+# match here either. Default 8 (rejects /0 to /7).
+: "${BLOCKLIST_MIN_PREFIX:=8}"
+if ! [[ "$BLOCKLIST_MIN_PREFIX" =~ ^[0-9]+$ ]] || [ "$BLOCKLIST_MIN_PREFIX" -lt 0 ] || [ "$BLOCKLIST_MIN_PREFIX" -gt 32 ]; then
+  echo "Error: BLOCKLIST_MIN_PREFIX invalid ('$BLOCKLIST_MIN_PREFIX'). Integer 0-32 expected." >&2
+  exit 1
+fi
+
 # --- Functions ---
 log() { echo "$*"; }
 err() { echo "$*" >&2; }
@@ -200,12 +210,13 @@ function is_bogon(addr) {
   sub(/[[:space:]]+$/, "", x);
   if (x == "") next;
 
-  # Validation + canonicalisation + bogon filter.
-  # allow_bogons=1 (via -v) for the whitelist: RFC1918 accepted (LAN management).
-  # Default allow_bogons=0: external sources strictly filtered.
+  # Validation + canonicalisation + bogon filter + min prefix safeguard.
+  # allow_bogons=1 (via -v) for the whitelist: RFC1918 accepted, prefix unchecked.
+  # min_prefix (via -v) rejects external entries with prefix < min_prefix
+  # (e.g. /0 from a corrupted source would otherwise match every IP).
   if (index(x, "/")) {
     split(x, t, "/");
-    if (valid_ipv4(t[1]) && valid_cidr(t[2]) && (allow_bogons || !is_bogon(t[1]))) print t[1] "/" t[2];
+    if (valid_ipv4(t[1]) && valid_cidr(t[2]) && (allow_bogons || (!is_bogon(t[1]) && t[2]+0 >= min_prefix))) print t[1] "/" t[2];
   } else {
     if (valid_ipv4(x) && (allow_bogons || !is_bogon(x))) print x "/32";
   }
@@ -228,7 +239,12 @@ BEGIN {
   net_int = ip_to_int(parts[1]);
   prefix = parts[2] + 0;
   block_size = 2 ^ (32 - prefix);
-  if (target_int >= net_int && target_int < net_int + block_size) {
+  # Mask to the network address: floor(net_int / block_size) * block_size.
+  # Required when the source uses non-canonical CIDR (e.g. "1.0.0.1/24"),
+  # otherwise the lower bound would exclude IPs whose host bits are below
+  # those of the source.
+  network = int(net_int / block_size) * block_size;
+  if (target_int >= network && target_int < network + block_size) {
     print $0;
   }
 }
@@ -319,7 +335,7 @@ for i in "${!URLS[@]}"; do
   total_checked=$((total_checked + 1))
 
   # Extraction + validation
-  awk "$AWK_PROG" "${TMP_DIR}/dl.${i}" > "${TMP_DIR}/src.${i}"
+  awk -v min_prefix="$BLOCKLIST_MIN_PREFIX" "$AWK_PROG" "${TMP_DIR}/dl.${i}" > "${TMP_DIR}/src.${i}"
   src_count="$(wc -l < "${TMP_DIR}/src.${i}")"
 
   # CIDR matching

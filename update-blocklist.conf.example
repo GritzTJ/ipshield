@@ -53,6 +53,13 @@ WHITELIST_SET_NAME="${SET_NAME}-allow"
 # the safeguard (not recommended).
 WHITELIST_MIN_PREFIX=8
 
+# --- Safeguard against overly broad blocklist entries ---
+# Rejects external blocklist entries with a prefix < BLOCKLIST_MIN_PREFIX.
+# Default 8 (rejects /0 to /7). Catches a corrupted or malicious source that
+# would inject 0.0.0.0/0 (ipset would normalise it to "match any IP", causing
+# a total server lockout). Set to 0 to disable the safeguard (not recommended).
+BLOCKLIST_MIN_PREFIX=8
+
 # --- Minimum entries threshold ---
 # If the number of valid entries is below this threshold, the script
 # refuses the update (protection against an empty or corrupt source).

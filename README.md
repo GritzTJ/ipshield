@@ -98,11 +98,11 @@ update-blocklist.sh [OPTIONS]
 
 | Source | Description |
 |---|---|
+| [Data-Shield](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist) | Critical malicious IP list |
 | [Spamhaus DROP](https://www.spamhaus.org/drop/) | Hijacked network ranges |
 | [Emerging Threats](https://rules.emergingthreats.net/) | IPs blocked by ET rules |
-| [AbuseIPDB](https://github.com/borestad/blocklist-abuseipdb) | IPs reported with 100% score over 365 days |
 | [CI Army (CINS)](https://cinsscore.com/) | IPs with poor reputation score |
-| [Data-Shield](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist) | Critical malicious IP list |
+| [AbuseIPDB](https://github.com/borestad/blocklist-abuseipdb) | IPs reported with 100% score over 365 days |
 | [FireHOL Level 1](https://iplists.firehol.org/) | Curated meta-list, low false-positive |
 | [GreenSnow](https://blocklist.greensnow.co/) | Active SSH/HTTP brute-force IPs |
 | [Blocklist.de](https://www.blocklist.de/) | Reported IPs (SSH, mail, web, FTP, etc.) |
@@ -206,11 +206,11 @@ update-blocklist.sh [OPTIONS]
 
 | Source | Description |
 |---|---|
+| [Data-Shield](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist) | Liste critique d'IP malveillantes |
 | [Spamhaus DROP](https://www.spamhaus.org/drop/) | Plages réseau détournées (hijack) |
 | [Emerging Threats](https://rules.emergingthreats.net/) | IP bloquées par règles ET |
-| [AbuseIPDB](https://github.com/borestad/blocklist-abuseipdb) | IP signalées avec un score de 100% sur 365 jours |
 | [CI Army (CINS)](https://cinsscore.com/) | IP à mauvais score de réputation |
-| [Data-Shield](https://github.com/duggytuxy/Data-Shield_IPv4_Blocklist) | Liste critique d'IP malveillantes |
+| [AbuseIPDB](https://github.com/borestad/blocklist-abuseipdb) | IP signalées avec un score de 100% sur 365 jours |
 | [FireHOL Level 1](https://iplists.firehol.org/) | Méta-liste curée, faible faux-positif |
 | [GreenSnow](https://blocklist.greensnow.co/) | Brute-force SSH/HTTP actifs |
 | [Blocklist.de](https://www.blocklist.de/) | IP signalées (SSH, mail, web, FTP, etc.) |

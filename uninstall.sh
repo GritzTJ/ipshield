@@ -152,16 +152,6 @@ detect_docker() {
   iptables -L DOCKER-USER -n >/dev/null 2>&1
 }
 
-# --- Count ipshield rules present (iptables) ---
-count_iptables_rules() {
-  local chain="$1"
-  local total=0
-  if iptables -L "$chain" -n 2>/dev/null | grep -q .; then
-    total=$(( total + $(iptables -S "$chain" 2>/dev/null | grep -c -E -- "--match-set ($SET_NAME|$WHITELIST_SET_NAME) src" || true) ))
-  fi
-  echo "$total"
-}
-
 # --- iptables removal (idempotent, removes all occurrences) ---
 remove_iptables_rules() {
   local chain="$1"

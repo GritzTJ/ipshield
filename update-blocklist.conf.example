@@ -20,6 +20,7 @@ URLS=(
   "https://lists.blocklist.de/lists/all.txt"
   "https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt"
   "https://check.torproject.org/torbulkexitlist"
+  "https://raw.githubusercontent.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs/main/Scanner_IP_ranges.txt"
 )
 
 # --- ipset blacklist name ---

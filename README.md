@@ -21,7 +21,7 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 
 ### Features
 
-- **10 curated public IPv4 blocklists** aggregated into a single ipset (Spamhaus, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, Tor exits)
+- **11 curated public IPv4 blocklists** aggregated into a single ipset (Spamhaus, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, Tor exits, Internet Scanner ranges)
 - **RFC 6890 bogon filter**: rejects RFC1918, loopback, link-local, multicast and other reserved ranges from upstream sources to prevent self-blocking the LAN or Docker bridge
 - **Four supported firewalls**: iptables, nftables, firewalld, ufw — auto-detected and applied idempotently
 - **Docker-aware**: inbound-only protection of the `DOCKER-USER` chain, scoped to the WAN interface (container egress is never filtered)
@@ -108,6 +108,7 @@ update-blocklist.sh [OPTIONS]
 | [Blocklist.de](https://www.blocklist.de/) | Reported IPs (SSH, mail, web, FTP, etc.) |
 | [IPsum](https://github.com/stamparm/ipsum) | Aggregator of 30+ sources, IPs in ≥3 lists |
 | [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Tor exit nodes |
+| [Internet Scanner IPs](https://github.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs) | Aggregated /24 ranges of known internet scanners (Shodan, Censys, ONYPHE, GreyNoise, etc.) |
 
 Sources are customisable via the `URLS` variable in `/etc/update-blocklist.conf`.
 
@@ -128,7 +129,7 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 
 ### Fonctionnalités
 
-- **10 listes publiques d'IPv4 malveillantes** agrégées dans un seul ipset (Spamhaus, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, nœuds de sortie Tor)
+- **11 listes publiques d'IPv4 malveillantes** agrégées dans un seul ipset (Spamhaus, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, nœuds de sortie Tor, ranges de scanners Internet)
 - **Filtre des bogons RFC 6890** : rejette RFC1918, loopback, link-local, multicast et autres plages réservées issues des sources externes, afin d'éviter d'auto-bloquer le LAN ou le bridge Docker
 - **Quatre firewalls supportés** : iptables, nftables, firewalld, ufw — détection automatique et application idempotente des règles
 - **Compatible Docker** : protection de la chaîne `DOCKER-USER` en entrée uniquement, scopée à l'interface WAN (l'egress des conteneurs n'est jamais filtré)
@@ -215,6 +216,7 @@ update-blocklist.sh [OPTIONS]
 | [Blocklist.de](https://www.blocklist.de/) | IP signalées (SSH, mail, web, FTP, etc.) |
 | [IPsum](https://github.com/stamparm/ipsum) | Agrégat de 30+ sources, IPs vues dans ≥3 listes |
 | [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Nœuds de sortie Tor |
+| [Internet Scanner IPs](https://github.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs) | Ranges /24 agrégés de scanners Internet connus (Shodan, Censys, ONYPHE, GreyNoise, etc.) |
 
 Sources personnalisables via la variable `URLS` dans `/etc/update-blocklist.conf`.
 

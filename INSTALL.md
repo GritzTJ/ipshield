@@ -79,6 +79,7 @@ The script downloads and aggregates the following lists:
 | [Blocklist.de](https://www.blocklist.de/) | Reported IPs (SSH, mail, web, FTP, etc.) |
 | [IPsum](https://github.com/stamparm/ipsum) | Aggregator of 30+ sources, IPs in ≥3 lists |
 | [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Tor exit nodes |
+| [Internet Scanner IPs](https://github.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs) | Aggregated /24 ranges of known internet scanners (Shodan, Censys, ONYPHE, GreyNoise, etc.) |
 
 These sources are customisable via the `URLS` variable in `/etc/update-blocklist.conf`.
 
@@ -538,6 +539,7 @@ Le script télécharge et agrège les listes suivantes :
 | [Blocklist.de](https://www.blocklist.de/) | IP signalées (SSH, mail, web, FTP, etc.) |
 | [IPsum](https://github.com/stamparm/ipsum) | Agrégat de 30+ sources, IPs vues dans ≥3 listes |
 | [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Nœuds de sortie Tor |
+| [Internet Scanner IPs](https://github.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs) | Ranges /24 agrégés de scanners Internet connus (Shodan, Censys, ONYPHE, GreyNoise, etc.) |
 
 Ces sources sont personnalisables via la variable `URLS` dans `/etc/update-blocklist.conf`.
 

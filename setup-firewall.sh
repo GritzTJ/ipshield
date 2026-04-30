@@ -238,6 +238,36 @@ _install_config() {
   return 0
 }
 
+# --- Installation du fichier de configuration ---
+# /etc/update-blocklist.conf est requis par update-blocklist.sh. On le copie
+# depuis update-blocklist.conf.example si absent. Si present, on n'ecrase pas
+# (preserve les modifications du user).
+configure_conf() {
+  local conf_path="/etc/update-blocklist.conf"
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local example="$script_dir/update-blocklist.conf.example"
+
+  echo ""
+  if [ -f "$conf_path" ]; then
+    log "Configuration $conf_path : deja presente, conservee telle quelle."
+    log "  Pour reinitialiser depuis l'exemple : sudo rm $conf_path && relance setup-firewall.sh."
+    return 0
+  fi
+
+  if [ ! -f "$example" ]; then
+    err "$example introuvable. Impossible d'initialiser $conf_path."
+    err "  Copie manuellement le fichier depuis le repo, puis relance setup-firewall.sh."
+    return 1
+  fi
+
+  log "Installation de $conf_path depuis $example..."
+  cp "$example" "$conf_path"
+  chown root:root "$conf_path"
+  chmod 600 "$conf_path"
+  log "  Configuration installee. Edite-la si besoin (whitelist, sources personnalisees, etc.)."
+}
+
 # --- Configuration des logs (rsyslog filter + logrotate) ---
 configure_logs() {
   echo ""
@@ -409,6 +439,7 @@ esac
 if [ "$FIREWALL" = "$DETECTED" ]; then
   echo ""
   log "$FIREWALL est déjà actif sur ce système (pas de transition nécessaire)."
+  configure_conf
   configure_cron
   configure_logs
   exit 0
@@ -680,6 +711,7 @@ trap - EXIT INT TERM
 echo ""
 log "$FIREWALL installé et activé avec succès."
 
+configure_conf
 configure_cron
 configure_logs
 

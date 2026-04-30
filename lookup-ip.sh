@@ -54,44 +54,46 @@ if [ -z "$TARGET_IP" ]; then
   exit 1
 fi
 
-# --- Valeurs par défaut ---
-URLS=(
-  "https://raw.githubusercontent.com/duggytuxy/Data-Shield_IPv4_Blocklist/refs/heads/main/prod_critical_data-shield_ipv4_blocklist.txt"
-  "https://www.spamhaus.org/drop/drop.txt"
-  "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt"
-  "https://cinsscore.com/list/ci-badguys.txt"
-  "https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/refs/heads/main/abuseipdb-s100-365d.ipv4"
-  "https://iplists.firehol.org/files/firehol_level1.netset"
-  "https://blocklist.greensnow.co/greensnow.txt"
-  "https://lists.blocklist.de/lists/all.txt"
-  "https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt"
-  "https://check.torproject.org/torbulkexitlist"
-)
-SET_NAME="blacklist"
+# --- Initialisation des variables (les valeurs viennent du fichier de conf) ---
+URLS=()
 VERBOSE=0
 
-# --- Source config file (si existe) ---
-if [ -f "$CONF_FILE" ]; then
-  if [ "$(id -u)" -eq 0 ]; then
-    # Root : vérifications de sécurité complètes
-    conf_owner="$(stat -c '%u' "$CONF_FILE")"
-    conf_perms="$(stat -c '%a' "$CONF_FILE")"
-    if [ "$conf_owner" != "0" ]; then
-      echo "Erreur : $CONF_FILE n'appartient pas à root (uid=$conf_owner). Risque de sécurité." >&2
-      exit 1
-    fi
-    if [[ "$conf_perms" =~ [2367][0-9]$ ]] || [[ "$conf_perms" =~ [0-9][2367]$ ]]; then
-      echo "Erreur : $CONF_FILE est group/world-writable (perms=$conf_perms). Risque de sécurité." >&2
-      exit 1
-    fi
-    # shellcheck source=/dev/null
-    . "$CONF_FILE"
-  elif [ -r "$CONF_FILE" ]; then
-    # Non-root : source si lisible
-    # shellcheck source=/dev/null
-    . "$CONF_FILE"
-  fi
+# --- Source config file (REQUIS, sauf si non lisible par un user non-root) ---
+# Le fichier de conf (meme contenu que update-blocklist.sh) est la source de
+# verite unique. Pour un usage diagnostic depuis une machine sans ipshield,
+# l'utilisateur peut pointer -c vers une copie de update-blocklist.conf.example.
+if [ ! -f "$CONF_FILE" ]; then
+  echo "Erreur : fichier de configuration $CONF_FILE absent." >&2
+  echo "Lance ./setup-firewall.sh pour l'installer, ou pointe -c vers une copie" >&2
+  echo "de update-blocklist.conf.example." >&2
+  exit 1
 fi
+if [ "$(id -u)" -eq 0 ]; then
+  # Root : verifications de securite completes
+  conf_owner="$(stat -c '%u' "$CONF_FILE")"
+  conf_perms="$(stat -c '%a' "$CONF_FILE")"
+  if [ "$conf_owner" != "0" ]; then
+    echo "Erreur : $CONF_FILE n'appartient pas à root (uid=$conf_owner). Risque de sécurité." >&2
+    exit 1
+  fi
+  if [[ "$conf_perms" =~ [2367][0-9]$ ]] || [[ "$conf_perms" =~ [0-9][2367]$ ]]; then
+    echo "Erreur : $CONF_FILE est group/world-writable (perms=$conf_perms). Risque de sécurité." >&2
+    exit 1
+  fi
+elif [ ! -r "$CONF_FILE" ]; then
+  echo "Erreur : $CONF_FILE non lisible par l'utilisateur courant." >&2
+  echo "Relance en root, ou pointe -c vers une copie lisible." >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+. "$CONF_FILE"
+
+# --- Validation des variables requises ---
+if [ "${#URLS[@]}" -eq 0 ]; then
+  echo "Erreur : URLS est vide ou non defini dans $CONF_FILE." >&2
+  exit 1
+fi
+: "${SET_NAME:=blacklist}"
 
 # --- Appliquer overrides CLI ---
 [ -n "$CLI_VERBOSE" ] && VERBOSE=1
@@ -180,6 +182,13 @@ function valid_cidr(p) {
   if (p !~ /^[0-9]{1,2}$/) return 0;
   return (p+0 >= 0 && p+0 <= 32);
 }
+# Rejette les plages reservees (RFC 6890) qui ne devraient jamais apparaitre
+# dans une blocklist publique. Empeche un faux positif catastrophique
+# (ex : FireHOL Level 1 qui inclut les bogons par design) de bloquer le LAN
+# ou le bridge Docker.
+function is_bogon(addr) {
+  return (addr ~ /^(0\.|10\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.|127\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.(0\.(0|2)|168)\.|198\.(1[89]|51\.100)\.|203\.0\.113\.|22[4-9]\.|23[0-9]\.|24[0-9]\.|25[0-5]\.)/);
+}
 {
   # Extraction : normaliser espaces, extraire premier champ commençant par un chiffre
   gsub(/[[:space:]]+/, " ");
@@ -191,12 +200,14 @@ function valid_cidr(p) {
   sub(/[[:space:]]+$/, "", x);
   if (x == "") next;
 
-  # Validation + canonicalisation
+  # Validation + canonicalisation + filtrage bogons.
+  # allow_bogons=1 (via -v) pour la whitelist : RFC1918 accepte (LAN management).
+  # Par defaut allow_bogons=0 : sources externes strictement filtrees.
   if (index(x, "/")) {
     split(x, t, "/");
-    if (valid_ipv4(t[1]) && valid_cidr(t[2])) print t[1] "/" t[2];
+    if (valid_ipv4(t[1]) && valid_cidr(t[2]) && (allow_bogons || !is_bogon(t[1]))) print t[1] "/" t[2];
   } else {
-    if (valid_ipv4(x)) print x "/32";
+    if (valid_ipv4(x) && (allow_bogons || !is_bogon(x))) print x "/32";
   }
 }
 '

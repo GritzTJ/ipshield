@@ -23,20 +23,21 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 
 - Agrège **10 listes publiques** de blocage IPv4 (Spamhaus DROP, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, Tor exit nodes)
 - Téléchargements **parallèles** avec retry et timeout
-- **Validation stricte** des IP/CIDR (programme awk fusionné)
+- **Validation stricte** des IP/CIDR (programme awk fusionné) avec **filtre bogons RFC 6890** : rejette RFC1918, loopback, link-local, multicast, etc. (défense contre les sources qui les incluent par design comme FireHOL Level 1)
 - Mise à jour **atomique** via `ipset restore` + `swap` (zéro downtime)
 - **Détection automatique** du firewall actif
 - Application **idempotente** des règles LOG + DROP
-- **Support Docker** : protection automatique de la chaîne `DOCKER-USER` (conteneurs exposés)
+- **Support Docker** : protection automatique de la chaîne `DOCKER-USER` (conteneurs exposés), **filtrage entrée uniquement** scopé à l'interface WAN (pas de filtrage de l'egress des conteneurs)
 - **Whitelist** : IP/subnets toujours autorisés (ex: IP de management) via la variable `WHITELIST` en config
 - **Cron auto** : `setup-firewall.sh` propose la configuration du crontab (idempotent, MAILTO optionnel, sleep `@reboot` configurable)
+- **Conf auto** : `setup-firewall.sh` installe `/etc/update-blocklist.conf` depuis l'exemple si absent (chmod 600 root)
 - **Logs auto** : `setup-firewall.sh` propose aussi l'installation du filtre rsyslog (`BLOCKED:` → `/var/log/blocked-ips.log`) et des configs logrotate
 - **Désinstallation propre** (`uninstall.sh`) avec mode dry-run, confirmation, et retrait optionnel du crontab et des configs logs
 - **Seuil minimum** d'entrées (protection anti-purge)
 - Calcul **dynamique** de hashsize/maxelem
 - **Rapport de diff** : entrées ajoutées, retirées, inchangées
 - Mode **dry-run** et **verbose**
-- **Configuration externe** optionnelle (`/etc/update-blocklist.conf`)
+- **Configuration externe** requise (`/etc/update-blocklist.conf`, source de vérité unique)
 - **Verrou** anti-concurrence (`flock`)
 - Logs vers stdout/stderr + **syslog**
 
@@ -139,20 +140,21 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 
 - Aggregates **10 public** IPv4 blocklists (Spamhaus DROP, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, Tor exit nodes)
 - **Parallel** downloads with retry and timeout
-- **Strict validation** of IPs/CIDRs (single fused awk program)
+- **Strict validation** of IPs/CIDRs (single fused awk program) with **bogon filter** (RFC 6890): rejects RFC1918, loopback, link-local, multicast, etc. (defense against sources that include them by design like FireHOL Level 1)
 - **Atomic** updates via `ipset restore` + `swap` (zero downtime)
 - **Automatic detection** of the active firewall
 - **Idempotent** LOG + DROP rule application
-- **Docker support**: automatic `DOCKER-USER` chain protection (exposed containers)
+- **Docker support**: automatic `DOCKER-USER` chain protection (exposed containers), **inbound-only filtering** scoped to the WAN interface (no egress filtering)
 - **Whitelist**: always-allowed IPs/subnets (e.g. management IPs) via the `WHITELIST` config variable
 - **Cron setup**: `setup-firewall.sh` offers crontab configuration (idempotent, optional MAILTO, configurable `@reboot` sleep)
+- **Conf setup**: `setup-firewall.sh` installs `/etc/update-blocklist.conf` from the example if absent (chmod 600 root)
 - **Logging setup**: `setup-firewall.sh` also offers rsyslog filter (`BLOCKED:` → `/var/log/blocked-ips.log`) and logrotate configs
 - **Clean uninstall** (`uninstall.sh`) with dry-run, confirmation, and optional removal of crontab and logging configs
 - **Minimum threshold** of entries (anti-purge protection)
 - **Dynamic** hashsize/maxelem calculation
 - **Diff report**: added, removed, unchanged entries
 - **Dry-run** and **verbose** modes
-- Optional **external configuration** (`/etc/update-blocklist.conf`)
+- Required **external configuration** (`/etc/update-blocklist.conf`, single source of truth)
 - **Concurrency lock** (`flock`)
 - Logs to stdout/stderr + **syslog**
 

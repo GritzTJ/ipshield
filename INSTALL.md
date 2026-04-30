@@ -29,16 +29,18 @@ cd ipshield
 chmod 700 *.sh
 ```
 
-## Configuration (optionnel)
+## Configuration
 
-Copier l'exemple de configuration et l'adapter si besoin :
+`/etc/update-blocklist.conf` est **requis** par `update-blocklist.sh` et `lookup-ip.sh`. C'est la **source de vérité unique** pour les URLs et les défauts.
+
+`setup-firewall.sh` copie automatiquement `update-blocklist.conf.example` vers `/etc/update-blocklist.conf` (chmod 600, owner root) lors de l'installation. En cas de besoin manuel :
 
 ```bash
 cp update-blocklist.conf.example /etc/update-blocklist.conf
 chmod 600 /etc/update-blocklist.conf
 ```
 
-Par défaut, le script fonctionne sans fichier de configuration. Les variables personnalisables sont :
+Variables (toutes définies avec leur valeur prod-ready dans le fichier d'exemple) :
 
 | Variable | Défaut | Description |
 |---|---|---|
@@ -52,6 +54,7 @@ Par défaut, le script fonctionne sans fichier de configuration. Les variables p
 | `BASE_MAXELEM` | `300000` | Maxelem de base pour ipset |
 | `LOG_LIMIT` | `60/min` | Rate-limit du logging des paquets bloqués (`N/sec`, `N/min`, `N/hour`, `N/day` ; vide = pas de limite) |
 | `LOG_BURST` | `100` | Burst maximum avant que `LOG_LIMIT` s'applique |
+| `WAN_INTERFACE` | `""` (auto) | Interface WAN pour scoper la règle DOCKER-USER au trafic entrant uniquement. Vide = auto-détection via `ip route get 1.1.1.1`. À définir explicitement si l'auto-détection donne le mauvais résultat (ex : VPN). |
 
 ### Sources par défaut
 
@@ -89,10 +92,11 @@ Le script :
 4. Désactive l'ancien firewall si un autre est choisi (avec rollback automatique en cas d'échec)
 5. Installe et active le nouveau firewall
 6. Vérifie que le firewall répond après activation (sinon rollback)
-7. **Propose de configurer le crontab ipshield** : chemin du script, fichier de log, MAILTO optionnel, délai au `@reboot`. Idempotent (relance possible pour modifier).
-8. **Propose d'installer le filtre rsyslog + logrotate** : `30-blocked-ips.conf` pour rediriger les `BLOCKED:` vers `/var/log/blocked-ips.log`, et deux configs logrotate (rotate 4 weekly). Idempotent (compare le contenu, ne ré-écrit que si différent ou absent). Si rsyslog est absent du système (Debian minimal par exemple), un sous-prompt propose de l'installer ou de garder journald (logs consultables via `journalctl -k --grep 'BLOCKED:'`).
+7. **Installe `/etc/update-blocklist.conf`** depuis `update-blocklist.conf.example` si absent (chmod 600, owner root). Ne touche pas au fichier existant pour préserver les modifications.
+8. **Propose de configurer le crontab ipshield** : chemin du script, fichier de log, MAILTO optionnel, délai au `@reboot`. Idempotent (relance possible pour modifier).
+9. **Propose d'installer le filtre rsyslog + logrotate** : `30-blocked-ips.conf` pour rediriger les `BLOCKED:` vers `/var/log/blocked-ips.log`, et deux configs logrotate (rotate 4 weekly). Idempotent (compare le contenu, ne ré-écrit que si différent ou absent). Si rsyslog est absent du système (Debian minimal par exemple), un sous-prompt propose de l'installer ou de garder journald (logs consultables via `journalctl -k --grep 'BLOCKED:'`).
 
-> Si le firewall choisi est déjà actif (pas de transition), `setup-firewall.sh` saute directement aux étapes 7 et 8.
+> Si le firewall choisi est déjà actif (pas de transition), `setup-firewall.sh` saute directement aux étapes 7 à 9.
 
 ### Étape 2 : Lancer le blocage (première exécution)
 
@@ -238,21 +242,25 @@ Les entrées dans `/etc/crontab` ou `/etc/cron.d/*` sont seulement listées (à 
 
 Sur un hôte Docker, le trafic destiné aux conteneurs (ports publiés via `-p` / `ports:`) passe par la chaîne `FORWARD`, pas `INPUT`. Sans protection supplémentaire, les IP bloquées atteignent quand même les conteneurs.
 
-Le script détecte automatiquement la présence de Docker via la chaîne `DOCKER-USER` dans iptables. Quand elle existe, les mêmes règles LOG + DROP sont appliquées sur `DOCKER-USER` en plus de `INPUT`, protégeant ainsi les conteneurs exposés (ex : Traefik, Nginx, etc.).
+Le script détecte automatiquement la présence de Docker via la chaîne `DOCKER-USER` dans iptables. Quand elle existe, les mêmes règles LOG + DROP sont appliquées sur `DOCKER-USER` en plus de `INPUT`, **scopées à l'interface WAN** (`-i $WAN_INTERFACE`) pour ne filtrer que le trafic **entrant** depuis Internet vers les conteneurs. Le trafic sortant des conteneurs (qui passe par `IN=br-xxx`) n'est jamais filtré, conformément au principe "filtrer uniquement l'entrée".
+
+**Auto-détection de l'interface WAN** : par défaut, le script détecte l'interface via `ip route get 1.1.1.1`. Si l'auto-détection donne le mauvais résultat (cas VPN/multi-homed), définir `WAN_INTERFACE="ens160"` dans `/etc/update-blocklist.conf`.
+
+**Filtrage des bogons (RFC 6890)** : le script rejette automatiquement toute IP/CIDR dans les plages réservées (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, multicast, etc.). Empêche un faux positif d'une source publique de bloquer le LAN ou le bridge Docker (cas réel : FireHOL Level 1 inclut les bogons par design).
 
 **Notes :**
 
 - Docker recrée `DOCKER-USER` à chaque restart du daemon — les règles ne persistent pas. Le cron + `@reboot` les réapplique automatiquement, et l'idempotence évite les doublons.
 - Si le script s'exécute au boot avant Docker, `DOCKER-USER` n'existe pas encore — la détection est correctement négative. Le prochain cron rattrapera.
-- Aucune configuration nécessaire : la détection et l'application sont entièrement automatiques.
+- Aucune configuration nécessaire si l'auto-détection WAN fonctionne : la détection et l'application sont entièrement automatiques.
 
 Vérification après exécution :
 
 ```bash
-iptables -L DOCKER-USER -n
+iptables -L DOCKER-USER -n -v
 ```
 
-Les règles LOG + DROP avec `match-set blacklist src` doivent apparaître.
+Les règles LOG + DROP avec `match-set blacklist src` et `in ens160` (ou ton interface WAN) doivent apparaître.
 
 ## Automatisation (cron)
 
@@ -435,11 +443,11 @@ Puis `ufw reload`.
 
 #### Docker (DOCKER-USER)
 
-Sur un hôte Docker, ajouter les mêmes règles sur la chaîne `DOCKER-USER` pour protéger les conteneurs :
+Sur un hôte Docker, ajouter les mêmes règles sur la chaîne `DOCKER-USER` pour protéger les conteneurs. Important : scoper à l'interface WAN (ex `ens160`) pour ne filtrer que l'entrée et laisser passer l'egress des conteneurs :
 
 ```bash
-iptables -I DOCKER-USER -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
-iptables -I DOCKER-USER 2 -m set --match-set blacklist src -j DROP
+iptables -I DOCKER-USER -i ens160 -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+iptables -I DOCKER-USER 2 -i ens160 -m set --match-set blacklist src -j DROP
 ```
 
-> `update-blocklist.sh` fait cela automatiquement quand Docker est détecté. La configuration manuelle n'est nécessaire que si vous n'utilisez pas le script.
+> `update-blocklist.sh` fait cela automatiquement quand Docker est détecté, avec auto-détection de l'interface WAN. La configuration manuelle n'est nécessaire que si vous n'utilisez pas le script.

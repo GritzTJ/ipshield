@@ -44,49 +44,57 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# --- Valeurs par défaut ---
-URLS=(
-  "https://raw.githubusercontent.com/duggytuxy/Data-Shield_IPv4_Blocklist/refs/heads/main/prod_critical_data-shield_ipv4_blocklist.txt"
-  "https://www.spamhaus.org/drop/drop.txt"
-  "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt"
-  "https://cinsscore.com/list/ci-badguys.txt"
-  "https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/refs/heads/main/abuseipdb-s100-365d.ipv4"
-  "https://iplists.firehol.org/files/firehol_level1.netset"
-  "https://blocklist.greensnow.co/greensnow.txt"
-  "https://lists.blocklist.de/lists/all.txt"
-  "https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt"
-  "https://check.torproject.org/torbulkexitlist"
-)
-SET_NAME="blacklist"
+# --- Initialisation des variables (les valeurs viennent du fichier de conf) ---
+URLS=()
 WHITELIST=()
-WHITELIST_MIN_PREFIX=8
 DRY_RUN=0
 VERBOSE=0
-MIN_ENTRIES=1000
-BASE_HASHSIZE="16384"
-BASE_MAXELEM="300000"
-LOG_LIMIT="60/min"
-LOG_BURST=100
+WAN_INTERFACE=""
 
-# --- Source config file (si existe) ---
-if [ -f "$CONF_FILE" ]; then
-  conf_owner="$(stat -c '%u' "$CONF_FILE")"
-  conf_perms="$(stat -c '%a' "$CONF_FILE")"
-  if [ "$conf_owner" != "0" ]; then
-    echo "Erreur : $CONF_FILE n'appartient pas à root (uid=$conf_owner). Risque de sécurité." >&2
-    exit 1
-  fi
-  if [[ "$conf_perms" =~ [2367][0-9]$ ]] || [[ "$conf_perms" =~ [0-9][2367]$ ]]; then
-    echo "Erreur : $CONF_FILE est group/world-writable (perms=$conf_perms). Risque de sécurité." >&2
-    exit 1
-  fi
-  # shellcheck source=/dev/null
-  . "$CONF_FILE"
+# --- Source config file (REQUIS) ---
+# Le fichier de conf est la source de verite unique. setup-firewall.sh le copie
+# depuis update-blocklist.conf.example si absent.
+if [ ! -f "$CONF_FILE" ]; then
+  echo "Erreur : fichier de configuration $CONF_FILE absent." >&2
+  echo "Lance ./setup-firewall.sh pour l'installer, ou copie manuellement" >&2
+  echo "update-blocklist.conf.example vers $CONF_FILE." >&2
+  exit 1
 fi
+conf_owner="$(stat -c '%u' "$CONF_FILE")"
+conf_perms="$(stat -c '%a' "$CONF_FILE")"
+if [ "$conf_owner" != "0" ]; then
+  echo "Erreur : $CONF_FILE n'appartient pas à root (uid=$conf_owner). Risque de sécurité." >&2
+  exit 1
+fi
+if [[ "$conf_perms" =~ [2367][0-9]$ ]] || [[ "$conf_perms" =~ [0-9][2367]$ ]]; then
+  echo "Erreur : $CONF_FILE est group/world-writable (perms=$conf_perms). Risque de sécurité." >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+. "$CONF_FILE"
 
 # --- Appliquer overrides CLI (priment sur config) ---
 [ -n "$CLI_DRY_RUN" ] && DRY_RUN=1
 [ -n "$CLI_VERBOSE" ] && VERBOSE=1
+
+# --- Validation des variables requises (presentes dans le fichier de conf) ---
+if [ "${#URLS[@]}" -eq 0 ]; then
+  echo "Erreur : URLS est vide ou non defini dans $CONF_FILE." >&2
+  echo "Le fichier doit contenir un tableau URLS=(...) avec au moins une source." >&2
+  exit 1
+fi
+for var in SET_NAME MIN_ENTRIES BASE_HASHSIZE BASE_MAXELEM WHITELIST_MIN_PREFIX; do
+  if [ -z "${!var:-}" ]; then
+    echo "Erreur : variable requise '$var' absente ou vide dans $CONF_FILE." >&2
+    exit 1
+  fi
+done
+for var in MIN_ENTRIES BASE_HASHSIZE BASE_MAXELEM; do
+  if ! [[ "${!var}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Erreur : $var invalide ('${!var}'). Entier positif attendu." >&2
+    exit 1
+  fi
+done
 
 # --- Validation SET_NAME ---
 if [[ ! "$SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
@@ -126,6 +134,16 @@ if [ -n "$LOG_LIMIT" ]; then
     echo "Erreur : LOG_BURST invalide ('$LOG_BURST'). Entier positif attendu." >&2
     exit 1
   fi
+fi
+
+# --- Auto-detection de l'interface WAN si non definie ---
+# Utilise pour scoper la regle DOCKER-USER au trafic entrant uniquement.
+if [ -z "$WAN_INTERFACE" ]; then
+  WAN_INTERFACE="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}')"
+fi
+if [ -n "$WAN_INTERFACE" ] && [[ ! "$WAN_INTERFACE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  echo "Erreur : WAN_INTERFACE invalide ('$WAN_INTERFACE')." >&2
+  exit 1
 fi
 
 # --- Variables dérivées ---
@@ -202,22 +220,15 @@ detect_docker() {
   iptables -L DOCKER-USER -n >/dev/null 2>&1
 }
 
-# --- Construit le tableau d'arguments iptables pour la règle LOG (selon LOG_LIMIT) ---
-_log_rule_args() {
-  local args=( -m set --match-set "$SET_NAME" src )
-  if [ -n "$LOG_LIMIT" ]; then
-    args+=( -m limit --limit "$LOG_LIMIT" --limit-burst "$LOG_BURST" )
-  fi
-  args+=( -j LOG --log-prefix "BLOCKED: " --log-level 4 )
-  printf '%s\n' "${args[@]}"
-}
-
-# --- Retire toutes les règles LOG ipshield existantes sur une chaîne (n'importe quelles valeurs de limit) ---
-_remove_old_log_rules() {
+# --- Retire les regles iptables matchant un pattern grep-E sur une chaine ---
+# Permet de gerer le drift sur n'importe quel parametre (LOG_LIMIT, -i iface, etc.)
+# en retirant toute regle qui matche le motif, peu importe ses autres flags.
+_remove_matching_rules() {
   local chain="$1"
+  local pattern="$2"
   local rule
   while true; do
-    rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A $chain .*--match-set $SET_NAME src.*-j LOG --log-prefix \"BLOCKED: \"" | head -1 || true)"
+    rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A $chain.*$pattern" | head -1 || true)"
     [ -z "$rule" ] && break
     rule="${rule/#-A /-D }"
     eval "iptables $rule"
@@ -225,57 +236,85 @@ _remove_old_log_rules() {
 }
 
 # --- Insertion/maj idempotente des règles LOG + DROP sur une chaîne iptables ---
-# Détecte le drift sur les paramètres LOG (LOG_LIMIT/LOG_BURST) et resynchronise.
+# $1 : chaine (INPUT, DOCKER-USER, ...)
+# $2 : interface optionnelle (vide = pas de contrainte). Utilisee pour DOCKER-USER
+#      afin de ne filtrer que le trafic ENTRANT depuis Internet (pas l'egress
+#      des conteneurs vers Internet).
+# Detecte le drift sur LOG_LIMIT/LOG_BURST et sur la presence/absence de -i.
 _apply_iptables_rules() {
   local chain="$1"
+  local iface="${2:-}"
   local actioned=0
-  local log_args
-  mapfile -t log_args < <(_log_rule_args)
 
-  # LOG : vérifier si la règle exacte (avec les valeurs actuelles) existe
+  local iface_args=()
+  [ -n "$iface" ] && iface_args=( -i "$iface" )
+
+  local log_args=( "${iface_args[@]}" -m set --match-set "$SET_NAME" src )
+  if [ -n "$LOG_LIMIT" ]; then
+    log_args+=( -m limit --limit "$LOG_LIMIT" --limit-burst "$LOG_BURST" )
+  fi
+  log_args+=( -j LOG --log-prefix "BLOCKED: " --log-level 4 )
+
+  local drop_args=( "${iface_args[@]}" -m set --match-set "$SET_NAME" src -j DROP )
+
+  # LOG : si la regle exacte (avec valeurs courantes + iface) n'existe pas,
+  # retirer toute regle LOG ipshield existante (pattern generique) puis inserer.
   if ! iptables -C "$chain" "${log_args[@]}" 2>/dev/null; then
-    _remove_old_log_rules "$chain"
+    _remove_matching_rules "$chain" "--match-set $SET_NAME src.*-j LOG --log-prefix \"BLOCKED: \""
     iptables -I "$chain" 1 "${log_args[@]}"
     actioned=1
   fi
 
-  # DROP : vérifier et insérer après LOG (pos 2)
-  if ! iptables -C "$chain" -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
-    iptables -I "$chain" 2 -m set --match-set "$SET_NAME" src -j DROP
+  # DROP : meme pattern (drift sur -i possible).
+  if ! iptables -C "$chain" "${drop_args[@]}" 2>/dev/null; then
+    _remove_matching_rules "$chain" "--match-set $SET_NAME src.*-j DROP$"
+    iptables -I "$chain" 2 "${drop_args[@]}"
     actioned=1
   fi
 
   [ "$actioned" -eq 1 ] && return 0 || return 1
 }
 
-# --- Insertion idempotente de la règle ACCEPT whitelist en position 1 ---
-# Vérifie qu'elle est bien la première règle ; sinon retire et ré-insère.
+# --- Insertion idempotente de la regle ACCEPT whitelist en position 1 ---
+# $1 : chaine
+# $2 : interface optionnelle (idem _apply_iptables_rules)
 _apply_whitelist_iptables() {
   local chain="$1"
+  local iface="${2:-}"
+  local iface_args=()
+  [ -n "$iface" ] && iface_args=( -i "$iface" )
+  local accept_args=( "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT )
+
+  # Verifier que la regle ACCEPT (avec ou sans iface) est bien la premiere
   local first_rule
   first_rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A" | head -1 || true)"
-  if echo "$first_rule" | grep -qE -- "--match-set $WHITELIST_SET_NAME src .*-j ACCEPT$"; then
+  local expected_pattern
+  if [ -n "$iface" ]; then
+    expected_pattern="-i $iface .*--match-set $WHITELIST_SET_NAME src .*-j ACCEPT$"
+  else
+    expected_pattern="^-A $chain -m set --match-set $WHITELIST_SET_NAME src -j ACCEPT$"
+  fi
+  if echo "$first_rule" | grep -qE -- "$expected_pattern"; then
     return
   fi
-  while iptables -C "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; do
-    iptables -D "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
-  done
-  iptables -I "$chain" 1 -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
+
+  # Sinon : retirer toutes les variantes (avec ou sans iface) et reinserer en pos 1
+  _remove_matching_rules "$chain" "--match-set $WHITELIST_SET_NAME src.*-j ACCEPT"
+  iptables -I "$chain" 1 "${accept_args[@]}"
 }
 
-# --- Suppression des règles ACCEPT whitelist (toutes occurrences) ---
+# --- Suppression des regles ACCEPT whitelist (toutes occurrences, avec/sans iface) ---
 _cleanup_whitelist_iptables() {
   local chain="$1"
-  while iptables -C "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; do
-    iptables -D "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
-  done
+  _remove_matching_rules "$chain" "--match-set $WHITELIST_SET_NAME src.*-j ACCEPT"
 }
 
 # --- Application/cleanup whitelist sur une chaîne iptables ---
 _whitelist_or_cleanup_iptables() {
   local chain="$1"
+  local iface="${2:-}"
   if [ "${#WHITELIST[@]}" -gt 0 ]; then
-    _apply_whitelist_iptables "$chain"
+    _apply_whitelist_iptables "$chain" "$iface"
   else
     _cleanup_whitelist_iptables "$chain"
   fi
@@ -304,13 +343,22 @@ apply_firewall_rules() {
 
   local docker_protected=0
 
+  # Avertissement si l'interface WAN n'a pas pu etre detectee : on filtre quand
+  # meme DOCKER-USER (sans -i), comportement legacy. Le filtre bogons evite que
+  # le LAN/Docker ne soit bloque par erreur, mais le trafic egress des conteneurs
+  # vers une vraie IP publique blacklistee sera quand meme drop.
+  if [ -z "$WAN_INTERFACE" ] && detect_docker; then
+    err "Avertissement : WAN_INTERFACE non detecte. La regle DOCKER-USER filtrera"
+    err "  dans les deux directions. Definir WAN_INTERFACE dans $CONF_FILE pour scoper."
+  fi
+
   case "$fw" in
     iptables)
       _apply_iptables_rules INPUT && log "Règles iptables ajoutées (LOG + DROP)."
       _whitelist_or_cleanup_iptables INPUT
       if detect_docker; then
-        _apply_iptables_rules DOCKER-USER && log "Règles iptables DOCKER-USER ajoutées (LOG + DROP)."
-        _whitelist_or_cleanup_iptables DOCKER-USER
+        _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "Règles iptables DOCKER-USER ajoutées (LOG + DROP, entrée ${WAN_INTERFACE:-toutes interfaces})."
+        _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
       fi
       ;;
@@ -323,8 +371,8 @@ apply_firewall_rules() {
       _apply_iptables_rules INPUT && log "Règles nftables ajoutées via iptables-nft (LOG + DROP)."
       _whitelist_or_cleanup_iptables INPUT
       if detect_docker; then
-        _apply_iptables_rules DOCKER-USER && log "Règles nftables DOCKER-USER ajoutées via iptables-nft (LOG + DROP)."
-        _whitelist_or_cleanup_iptables DOCKER-USER
+        _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "Règles nftables DOCKER-USER ajoutées via iptables-nft (LOG + DROP, entrée ${WAN_INTERFACE:-toutes interfaces})."
+        _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
       fi
       ;;
@@ -346,11 +394,19 @@ apply_firewall_rules() {
       fi
       _whitelist_or_cleanup_firewalld INPUT && need_reload=1
       if detect_docker; then
-        if ! firewall-cmd --permanent --direct --query-rule ipv4 filter DOCKER-USER 1 -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
-          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 0 "${fw_log_args[@]}"
-          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 1 -m set --match-set "$SET_NAME" src -j DROP
+        # DOCKER-USER : ajouter -i WAN_INTERFACE si defini (filtrage entree uniquement)
+        local docker_iface_args=()
+        [ -n "$WAN_INTERFACE" ] && docker_iface_args=( -i "$WAN_INTERFACE" )
+        local docker_log_args=( "${docker_iface_args[@]}" -m set --match-set "$SET_NAME" src )
+        if [ -n "$LOG_LIMIT" ]; then
+          docker_log_args+=( -m limit --limit "$LOG_LIMIT" --limit-burst "$LOG_BURST" )
+        fi
+        docker_log_args+=( -j LOG --log-prefix "BLOCKED: " --log-level 4 )
+        if ! firewall-cmd --permanent --direct --query-rule ipv4 filter DOCKER-USER 1 "${docker_iface_args[@]}" -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
+          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 0 "${docker_log_args[@]}"
+          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 1 "${docker_iface_args[@]}" -m set --match-set "$SET_NAME" src -j DROP
           need_reload=1
-          log "Règles firewalld DOCKER-USER ajoutées (LOG + DROP)."
+          log "Règles firewalld DOCKER-USER ajoutées (LOG + DROP, entrée ${WAN_INTERFACE:-toutes interfaces})."
         fi
         _whitelist_or_cleanup_firewalld DOCKER-USER && need_reload=1
         docker_protected=1
@@ -396,8 +452,8 @@ $ufw_log_line\\
       fi
       # Docker utilise iptables directement, hors du périmètre ufw
       if detect_docker; then
-        _apply_iptables_rules DOCKER-USER && log "Règles DOCKER-USER ajoutées (LOG + DROP)."
-        _whitelist_or_cleanup_iptables DOCKER-USER
+        _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "Règles DOCKER-USER ajoutées (LOG + DROP, entrée ${WAN_INTERFACE:-toutes interfaces})."
+        _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
       fi
       ;;
@@ -479,6 +535,13 @@ function valid_cidr(p) {
   if (p !~ /^[0-9]{1,2}$/) return 0;
   return (p+0 >= 0 && p+0 <= 32);
 }
+# Rejette les plages reservees (RFC 6890) qui ne devraient jamais apparaitre
+# dans une blocklist publique. Empeche un faux positif catastrophique
+# (ex : FireHOL Level 1 qui inclut les bogons par design) de bloquer le LAN
+# ou le bridge Docker.
+function is_bogon(addr) {
+  return (addr ~ /^(0\.|10\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.|127\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.(0\.(0|2)|168)\.|198\.(1[89]|51\.100)\.|203\.0\.113\.|22[4-9]\.|23[0-9]\.|24[0-9]\.|25[0-5]\.)/);
+}
 {
   # Extraction : normaliser espaces, extraire premier champ commençant par un chiffre
   gsub(/[[:space:]]+/, " ");
@@ -490,12 +553,14 @@ function valid_cidr(p) {
   sub(/[[:space:]]+$/, "", x);
   if (x == "") next;
 
-  # Validation + canonicalisation
+  # Validation + canonicalisation + filtrage bogons.
+  # allow_bogons=1 (via -v) pour la whitelist : RFC1918 accepte (LAN management).
+  # Par defaut allow_bogons=0 : sources externes strictement filtrees.
   if (index(x, "/")) {
     split(x, t, "/");
-    if (valid_ipv4(t[1]) && valid_cidr(t[2])) print t[1] "/" t[2];
+    if (valid_ipv4(t[1]) && valid_cidr(t[2]) && (allow_bogons || !is_bogon(t[1]))) print t[1] "/" t[2];
   } else {
-    if (valid_ipv4(x)) print x "/32";
+    if (valid_ipv4(x) && (allow_bogons || !is_bogon(x))) print x "/32";
   }
 }
 '
@@ -514,7 +579,8 @@ if [ "${#WHITELIST[@]}" -gt 0 ]; then
   invalid_wl=()
   too_wide_wl=()
   for entry in "${WHITELIST[@]}"; do
-    canonical="$(printf '%s\n' "$entry" | awk "$AWK_PROG")"
+    # allow_bogons=1 : la whitelist peut contenir du RFC1918 (LAN management)
+    canonical="$(printf '%s\n' "$entry" | awk -v allow_bogons=1 "$AWK_PROG")"
     if [ -z "$canonical" ]; then
       invalid_wl+=("$entry")
       continue

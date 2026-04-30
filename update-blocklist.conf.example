@@ -1,32 +1,35 @@
 # Configuration pour update-blocklist.sh
 # Copier vers /etc/update-blocklist.conf et adapter si besoin.
-# Ce fichier est source par le script — seules les variables ci-dessous sont attendues.
+# setup-firewall.sh fait la copie automatiquement si /etc/update-blocklist.conf
+# est absent.
 # Permissions requises : appartenir a root, pas de group/world-writable.
+#
+# CE FICHIER EST LA SOURCE DE VERITE de la configuration ipshield.
+# Les valeurs ci-dessous sont les defauts prod-ready ; modifier au besoin.
 
 # --- Listes de blocage ---
 # Tableau des URLs telechargees en parallele.
-# Decommenter et modifier pour personnaliser les sources.
-#URLS=(
-#  "https://raw.githubusercontent.com/duggytuxy/Data-Shield_IPv4_Blocklist/refs/heads/main/prod_critical_data-shield_ipv4_blocklist.txt"
-#  "https://www.spamhaus.org/drop/drop.txt"
-#  "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt"
-#  "https://cinsscore.com/list/ci-badguys.txt"
-#  "https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/refs/heads/main/abuseipdb-s100-365d.ipv4"
-#  "https://iplists.firehol.org/files/firehol_level1.netset"
-#  "https://blocklist.greensnow.co/greensnow.txt"
-#  "https://lists.blocklist.de/lists/all.txt"
-#  "https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt"
-#  "https://check.torproject.org/torbulkexitlist"
-#)
+URLS=(
+  "https://raw.githubusercontent.com/duggytuxy/Data-Shield_IPv4_Blocklist/refs/heads/main/prod_critical_data-shield_ipv4_blocklist.txt"
+  "https://www.spamhaus.org/drop/drop.txt"
+  "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt"
+  "https://cinsscore.com/list/ci-badguys.txt"
+  "https://raw.githubusercontent.com/borestad/blocklist-abuseipdb/refs/heads/main/abuseipdb-s100-365d.ipv4"
+  "https://iplists.firehol.org/files/firehol_level1.netset"
+  "https://blocklist.greensnow.co/greensnow.txt"
+  "https://lists.blocklist.de/lists/all.txt"
+  "https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt"
+  "https://check.torproject.org/torbulkexitlist"
+)
 
 # --- Nom du set ipset ---
 # Caracteres autorises : [a-zA-Z0-9_-]
-#SET_NAME="blacklist"
+SET_NAME="blacklist"
 
 # --- Nom du set ipset whitelist ---
 # Par defaut : "${SET_NAME}-allow" (ex: "blacklist-allow").
 # Caracteres autorises : [a-zA-Z0-9_-], doit etre different de SET_NAME.
-#WHITELIST_SET_NAME="blacklist-allow"
+WHITELIST_SET_NAME="${SET_NAME}-allow"
 
 # --- Whitelist : IP ou subnets toujours autorises (bypass blocklist + tout le firewall) ---
 # Format : tableau d'adresses IPv4 ou CIDR (notation x.y.z.w ou x.y.z.w/N).
@@ -45,18 +48,18 @@
 # Defaut : 8 (rejette /0 a /7 = au-dela de 16M IPs autorisees, potentiellement
 # une typo qui ouvrirait le serveur a tout Internet). Mettre a 0 pour desactiver
 # le garde-fou (deconseille).
-#WHITELIST_MIN_PREFIX=8
+WHITELIST_MIN_PREFIX=8
 
 # --- Seuil minimum d'entrees ---
 # Si le nombre d'entrees valides est inferieur a ce seuil, le script
 # refuse la mise a jour (protection contre une source vide ou corrompue).
-#MIN_ENTRIES=1000
+MIN_ENTRIES=1000
 
 # --- Parametres ipset ---
 # Valeurs de base pour hashsize et maxelem.
 # Le script ajuste dynamiquement si le nombre d'entrees depasse ces valeurs.
-#BASE_HASHSIZE=16384
-#BASE_MAXELEM=300000
+BASE_HASHSIZE=16384
+BASE_MAXELEM=300000
 
 # --- Rate-limit du logging des paquets bloques ---
 # LOG_LIMIT : taux maximum de logs ("N/sec", "N/min", "N/hour", "N/day").
@@ -67,6 +70,16 @@
 # Defauts : 60/min et 100 (sans risque de flood, perd des details sous attaque massive).
 # Drift : si tu modifies ces valeurs apres install, iptables/nftables/DOCKER-USER
 #         sont mis a jour automatiquement au prochain run. Pour ufw (before.rules)
-#         et firewalld (--direct), il faut uninstall.sh --apply puis ré-installer.
-#LOG_LIMIT="60/min"
-#LOG_BURST=100
+#         et firewalld (--direct), il faut uninstall.sh --apply puis re-installer.
+LOG_LIMIT="60/min"
+LOG_BURST=100
+
+# --- Interface WAN (pour la regle DOCKER-USER) ---
+# Sur la chaine DOCKER-USER, on ne bloque que le trafic ENTRANT depuis Internet
+# vers les conteneurs (paquets arrivant sur l'interface WAN).
+# Le trafic SORTANT des conteneurs (qui passe par le bridge Docker br-xxx)
+# n'est jamais filtre par la blocklist, conformement au principe "filtrer
+# uniquement l'entree".
+# Vide = auto-detection via "ip route get 1.1.1.1".
+# A definir explicitement si l'auto-detection donne le mauvais resultat (ex: VPN).
+WAN_INTERFACE=""

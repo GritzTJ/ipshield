@@ -39,8 +39,9 @@ WHITELIST_SET_NAME="${SET_NAME}-allow"
 # Si la liste est vide ou commentee, l'ipset whitelist et la regle ACCEPT sont
 # automatiquement supprimes au prochain run.
 #WHITELIST=(
-#  "203.0.113.42"
-#  "198.51.100.0/24"
+#  "10.0.0.0/8"
+#  "172.16.0.0/12"
+#  "192.168.0.0/16"
 #)
 
 # --- Garde-fou contre les prefixes trop larges en WHITELIST ---

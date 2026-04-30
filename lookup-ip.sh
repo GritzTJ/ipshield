@@ -5,20 +5,20 @@ umask 077
 # --- Usage / help ---
 usage() {
   cat <<'EOF'
-Usage: lookup-ip.sh [OPTIONS] <adresse_ip>
+Usage: lookup-ip.sh [OPTIONS] <ip_address>
 
-Recherche une adresse IPv4 dans les listes de blocage pour identifier
-la ou les sources qui la référencent.
+Look up an IPv4 address across the configured blocklists to identify
+which source(s) reference it.
 
 Arguments:
-  <adresse_ip>          Adresse IPv4 à rechercher (ex: 185.199.108.133)
+  <ip_address>          IPv4 address to look up (e.g. 185.199.108.133)
 
 Options:
-  -v, --verbose       Affichage détaillé (entrée CIDR, nombre d'entrées par source)
-  -c, --config FILE   Chemin du fichier de configuration
-  -h, --help          Affiche cette aide
+  -v, --verbose       Verbose output (matching CIDR entry, per-source counts)
+  -c, --config FILE   Configuration file path
+  -h, --help          Show this help
 
-Exemples:
+Examples:
   lookup-ip.sh 185.199.108.133
   lookup-ip.sh --verbose 1.2.3.4
   lookup-ip.sh -c /etc/my-blocklist.conf 10.0.0.1
@@ -35,13 +35,13 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -v|--verbose)  CLI_VERBOSE=1; shift ;;
     -c|--config)
-      [ $# -ge 2 ] || { echo "Erreur : --config nécessite un argument." >&2; exit 1; }
+      [ $# -ge 2 ] || { echo "Error: --config requires an argument." >&2; exit 1; }
       CONF_FILE="$2"; shift 2 ;;
     -h|--help)     usage ;;
-    -*)            echo "Option inconnue : $1" >&2; usage ;;
+    -*)            echo "Unknown option: $1" >&2; usage ;;
     *)
       if [ -n "$TARGET_IP" ]; then
-        echo "Erreur : une seule adresse IP autorisée." >&2
+        echo "Error: only one IP address allowed." >&2
         exit 1
       fi
       TARGET_IP="$1"; shift ;;
@@ -49,8 +49,8 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$TARGET_IP" ]; then
-  echo "Erreur : adresse IP manquante." >&2
-  echo "Usage: lookup-ip.sh [OPTIONS] <adresse_ip>" >&2
+  echo "Error: missing IP address." >&2
+  echo "Usage: lookup-ip.sh [OPTIONS] <ip_address>" >&2
   exit 1
 fi
 
@@ -63,9 +63,9 @@ VERBOSE=0
 # For diagnostic use from a machine without ipshield installed, point -c to a copy
 # of update-blocklist.conf.example.
 if [ ! -f "$CONF_FILE" ]; then
-  echo "Erreur : fichier de configuration $CONF_FILE absent." >&2
-  echo "Lance ./setup-firewall.sh pour l'installer, ou pointe -c vers une copie" >&2
-  echo "de update-blocklist.conf.example." >&2
+  echo "Error: configuration file $CONF_FILE not found." >&2
+  echo "Run ./setup-firewall.sh to install it, or point -c to a copy of" >&2
+  echo "update-blocklist.conf.example." >&2
   exit 1
 fi
 if [ "$(id -u)" -eq 0 ]; then
@@ -73,16 +73,16 @@ if [ "$(id -u)" -eq 0 ]; then
   conf_owner="$(stat -c '%u' "$CONF_FILE")"
   conf_perms="$(stat -c '%a' "$CONF_FILE")"
   if [ "$conf_owner" != "0" ]; then
-    echo "Erreur : $CONF_FILE n'appartient pas à root (uid=$conf_owner). Risque de sécurité." >&2
+    echo "Error: $CONF_FILE is not owned by root (uid=$conf_owner). Security risk." >&2
     exit 1
   fi
   if [[ "$conf_perms" =~ [2367][0-9]$ ]] || [[ "$conf_perms" =~ [0-9][2367]$ ]]; then
-    echo "Erreur : $CONF_FILE est group/world-writable (perms=$conf_perms). Risque de sécurité." >&2
+    echo "Error: $CONF_FILE is group/world-writable (perms=$conf_perms). Security risk." >&2
     exit 1
   fi
 elif [ ! -r "$CONF_FILE" ]; then
-  echo "Erreur : $CONF_FILE non lisible par l'utilisateur courant." >&2
-  echo "Relance en root, ou pointe -c vers une copie lisible." >&2
+  echo "Error: $CONF_FILE is not readable by the current user." >&2
+  echo "Re-run as root, or point -c to a readable copy." >&2
   exit 1
 fi
 # shellcheck source=/dev/null
@@ -90,7 +90,7 @@ fi
 
 # --- Validate required variables ---
 if [ "${#URLS[@]}" -eq 0 ]; then
-  echo "Erreur : URLS est vide ou non defini dans $CONF_FILE." >&2
+  echo "Error: URLS is empty or undefined in $CONF_FILE." >&2
   exit 1
 fi
 : "${SET_NAME:=blacklist}"
@@ -129,12 +129,12 @@ valid_ipv4() {
 }
 
 if ! valid_ipv4 "$TARGET_IP"; then
-  err "Erreur : '$TARGET_IP' n'est pas une adresse IPv4 valide."
+  err "Error: '$TARGET_IP' is not a valid IPv4 address."
   exit 1
 fi
 
 # --- Dependency check ---
-need_cmd() { command -v "$1" >/dev/null 2>&1 || { err "Erreur : commande manquante : $1"; exit 1; }; }
+need_cmd() { command -v "$1" >/dev/null 2>&1 || { err "Error: missing command: $1"; exit 1; }; }
 need_cmd curl
 need_cmd awk
 
@@ -152,7 +152,8 @@ source_name() {
     *greensnow*)             echo "GreenSnow" ;;
     *blocklist.de*)          echo "Blocklist.de" ;;
     *stamparm/ipsum*)        echo "IPsum" ;;
-    *torproject.org*)        echo "Tor exits" ;;
+    *torproject.org*)        echo "Tor exit nodes" ;;
+    *palinkas*)              echo "Internet Scanner IPs" ;;
     *)                       echo "Source $((idx+1))" ;;
   esac
 }
@@ -237,36 +238,36 @@ BEGIN {
 CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize 10485760 --retry 3 --retry-delay 2 --retry-all-errors )
 
 # --- Output ---
-log "Recherche de $TARGET_IP dans ${#URLS[@]} listes de blocage..."
+log "Looking up $TARGET_IP across ${#URLS[@]} blocklists..."
 echo ""
 
 # --- ipset test (if root + ipset available) ---
-echo "--- Statut ipset ---"
+echo "--- ipset status ---"
 if [ "$(id -u)" -eq 0 ] && command -v ipset >/dev/null 2>&1; then
   if ! ipset list -n 2>/dev/null | awk -v s="$SET_NAME" '$0==s{found=1} END{exit(found?0:1)}'; then
-    echo "  Set '$SET_NAME' : n'existe pas (lancez update-blocklist.sh d'abord)"
+    echo "  Set '$SET_NAME': not found (run update-blocklist.sh first)"
   elif ipset test "$SET_NAME" "$TARGET_IP" 2>/dev/null; then
-    echo "  Set '$SET_NAME' : IP PRÉSENTE (blocage actif)"
+    echo "  Set '$SET_NAME': IP PRESENT (block active)"
   else
-    echo "  Set '$SET_NAME' : IP absente du set"
+    echo "  Set '$SET_NAME': IP not in set"
   fi
   # Whitelist
   if ipset list -n 2>/dev/null | awk -v s="$WHITELIST_SET_NAME" '$0==s{found=1} END{exit(found?0:1)}'; then
     if ipset test "$WHITELIST_SET_NAME" "$TARGET_IP" 2>/dev/null; then
-      echo "  Set '$WHITELIST_SET_NAME' : IP PRÉSENTE (whitelist — bypass blocklist)"
+      echo "  Set '$WHITELIST_SET_NAME': IP PRESENT (whitelist - bypasses blocklist)"
     else
-      echo "  Set '$WHITELIST_SET_NAME' : IP absente"
+      echo "  Set '$WHITELIST_SET_NAME': IP not in set"
     fi
   fi
 else
-  echo "  (vérification ipset ignorée — nécessite root et ipset)"
+  echo "  (ipset check skipped - requires root and ipset)"
 fi
 echo ""
 
 # --- HTTP source warning ---
 for url in "${URLS[@]}"; do
   if [[ "$url" =~ ^http:// ]]; then
-    err "Avertissement : source HTTP (non chiffré) : $url"
+    err "Warning: HTTP (unencrypted) source: $url"
   fi
 done
 
@@ -288,18 +289,18 @@ for i in "${!URLS[@]}"; do
 done
 
 if [ "${#DL_OK[@]}" -eq 0 ]; then
-  err "Erreur : aucune source disponible."
+  err "Error: no source available."
   exit 1
 fi
 
 # --- Per-source search ---
-echo "--- Recherche par source ---"
+echo "--- Per-source search ---"
 found_count=0
 total_checked=0
 
 for i in "${!URLS[@]}"; do
   name="$(source_name "${URLS[$i]}" "$i")"
-  padded_name="$(printf "%-18s" "$name")"
+  padded_name="$(printf "%-22s" "$name")"
 
   # Failed-download source
   is_failed=0
@@ -311,7 +312,7 @@ for i in "${!URLS[@]}"; do
   done
 
   if [ "$is_failed" -eq 1 ]; then
-    echo "  ${padded_name}: (téléchargement échoué)"
+    echo "  ${padded_name}: (download failed)"
     continue
   fi
 
@@ -329,22 +330,22 @@ for i in "${!URLS[@]}"; do
     if [ "$VERBOSE" -eq 1 ]; then
       # Show each matching CIDR entry
       first_match="$(echo "$matches" | head -1)"
-      echo "  ${padded_name}: TROUVÉ → ${first_match} (${src_count} entrées)"
+      echo "  ${padded_name}: FOUND -> ${first_match} (${src_count} entries)"
       # If multiple matches, show the rest
       rest="$(echo "$matches" | tail -n +2)"
       if [ -n "$rest" ]; then
         while IFS= read -r m; do
-          printf "  %-18s  → %s\n" "" "$m"
+          printf "  %-22s  -> %s\n" "" "$m"
         done <<< "$rest"
       fi
     else
-      echo "  ${padded_name}: TROUVÉ"
+      echo "  ${padded_name}: FOUND"
     fi
   else
     if [ "$VERBOSE" -eq 1 ]; then
-      echo "  ${padded_name}: non trouvé (${src_count} entrées)"
+      echo "  ${padded_name}: not found (${src_count} entries)"
     else
-      echo "  ${padded_name}: non trouvé"
+      echo "  ${padded_name}: not found"
     fi
   fi
 done
@@ -352,5 +353,5 @@ done
 echo ""
 
 # --- Summary ---
-echo "--- Résumé ---"
-echo "  IP trouvée dans ${found_count}/${total_checked} source(s)."
+echo "--- Summary ---"
+echo "  IP found in ${found_count}/${total_checked} source(s)."

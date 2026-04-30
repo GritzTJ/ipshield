@@ -7,29 +7,30 @@ usage() {
   cat <<'EOF'
 Usage: uninstall.sh [OPTIONS]
 
-Retire les règles de blocage ipshield et détruit les ipsets associés.
-Par défaut, mode dry-run (affiche ce qui serait fait, sans rien modifier).
+Removes ipshield blocking rules and destroys the associated ipsets.
+Defaults to dry-run mode (shows what would be done, without modifying
+anything).
 
 Options:
-  --apply             Applique réellement la désinstallation (sinon dry-run).
-  -c, --config FILE   Chemin du fichier de configuration (défaut: /etc/update-blocklist.conf).
-  -h, --help          Affiche cette aide.
+  --apply             Actually apply the uninstall (otherwise dry-run).
+  -c, --config FILE   Configuration file path (default: /etc/update-blocklist.conf).
+  -h, --help          Show this help.
 
-Ce script :
-  - retire les règles ipshield (LOG + DROP blocklist, ACCEPT whitelist) sur INPUT
-    et DOCKER-USER (si Docker présent) ;
-  - détruit les ipsets $SET_NAME et $WHITELIST_SET_NAME ;
-  - restaure /etc/ufw/before.rules.bak si présent (ufw) ;
-  - informe (sans toucher) des lignes cron référençant update-blocklist.sh.
+This script:
+  - removes ipshield rules (LOG + DROP blocklist, ACCEPT whitelist) on INPUT
+    and DOCKER-USER (if Docker is present);
+  - destroys ipsets $SET_NAME and $WHITELIST_SET_NAME;
+  - restores /etc/ufw/before.rules.bak if present (ufw);
+  - reports (without modifying) cron lines referencing update-blocklist.sh.
 
-Il NE désinstalle PAS le firewall ni les paquets (ipset, iptables, etc.).
+It does NOT uninstall the firewall or any packages (ipset, iptables, etc.).
 EOF
   exit 0
 }
 
 # --- Root check ---
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Erreur : ce script doit être exécuté en tant que root." >&2
+  echo "Error: this script must be run as root." >&2
   exit 1
 fi
 
@@ -41,10 +42,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --apply)         APPLY=1; shift ;;
     -c|--config)
-      [ $# -ge 2 ] || { echo "Erreur : --config nécessite un argument." >&2; exit 1; }
+      [ $# -ge 2 ] || { echo "Error: --config requires an argument." >&2; exit 1; }
       CONF_FILE="$2"; shift 2 ;;
     -h|--help)       usage ;;
-    *)               echo "Option inconnue : $1" >&2; usage ;;
+    *)               echo "Unknown option: $1" >&2; usage ;;
   esac
 done
 
@@ -56,11 +57,11 @@ if [ -f "$CONF_FILE" ]; then
   conf_owner="$(stat -c '%u' "$CONF_FILE")"
   conf_perms="$(stat -c '%a' "$CONF_FILE")"
   if [ "$conf_owner" != "0" ]; then
-    echo "Erreur : $CONF_FILE n'appartient pas à root (uid=$conf_owner)." >&2
+    echo "Error: $CONF_FILE is not owned by root (uid=$conf_owner)." >&2
     exit 1
   fi
   if [[ "$conf_perms" =~ [2367][0-9]$ ]] || [[ "$conf_perms" =~ [0-9][2367]$ ]]; then
-    echo "Erreur : $CONF_FILE est group/world-writable (perms=$conf_perms)." >&2
+    echo "Error: $CONF_FILE is group/world-writable (perms=$conf_perms)." >&2
     exit 1
   fi
   # shellcheck source=/dev/null
@@ -69,12 +70,12 @@ fi
 
 # SET_NAME validation
 if [[ ! "$SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-  echo "Erreur : SET_NAME invalide ('$SET_NAME')." >&2
+  echo "Error: SET_NAME invalid ('$SET_NAME')." >&2
   exit 1
 fi
 : "${WHITELIST_SET_NAME:=${SET_NAME}-allow}"
 if [[ ! "$WHITELIST_SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-  echo "Erreur : WHITELIST_SET_NAME invalide ('$WHITELIST_SET_NAME')." >&2
+  echo "Error: WHITELIST_SET_NAME invalid ('$WHITELIST_SET_NAME')." >&2
   exit 1
 fi
 
@@ -87,7 +88,7 @@ LOCK_FILE="${LOCK_DIR}/${SET_NAME}.lock"
 mkdir -p "$LOCK_DIR"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
-  echo "Erreur : update-blocklist.sh tourne déjà ; réessayez dans quelques secondes." >&2
+  echo "Error: update-blocklist.sh is already running; retry in a few seconds." >&2
   exit 1
 fi
 
@@ -96,25 +97,25 @@ log() { echo "$*"; }
 err() { echo "$*" >&2; }
 
 # --- Uniform yes/no prompt with default ---
-# Usage: ask_yes_no "Question" oui|non
+# Usage: ask_yes_no "Question" yes|no
 # Returns: 0 if yes, 1 if no. Empty input = default. Invalid input = re-ask.
 ask_yes_no() {
   local prompt="$1"
   local default="$2"
   local hint
-  if [ "$default" = "oui" ]; then
-    hint="[Oui/non]"
+  if [ "$default" = "yes" ]; then
+    hint="[Yes/no]"
   else
-    hint="[oui/Non]"
+    hint="[yes/No]"
   fi
   local ans
   while true; do
-    read -rp "$prompt $hint : " ans
+    read -rp "$prompt $hint: " ans
     [ -z "$ans" ] && ans="$default"
     case "${ans,,}" in
-      oui|o|yes|y) return 0 ;;
-      non|n|no)    return 1 ;;
-      *) echo "  Réponse invalide. Tapez oui/non (ou Entrée pour [$default])." ;;
+      yes|y|oui|o) return 0 ;;
+      no|n|non)    return 1 ;;
+      *) echo "  Invalid answer. Type yes/no (or Enter for [$default])." ;;
     esac
   done
 }
@@ -144,7 +145,7 @@ detect_firewall() {
       echo "iptables"; return
     fi
   fi
-  echo "aucun"
+  echo "none"
 }
 
 detect_docker() {
@@ -206,43 +207,43 @@ show_iptables_rules() {
 
 # --- Firewall detection and action plan ---
 FW="$(detect_firewall)"
-log "Firewall détecté : $FW"
+log "Detected firewall: $FW"
 
 DOCKER_PRESENT=0
 if command -v iptables >/dev/null 2>&1 && detect_docker; then
   DOCKER_PRESENT=1
-  log "Docker détecté : la chaîne DOCKER-USER sera également nettoyée."
+  log "Docker detected: the DOCKER-USER chain will also be cleaned."
 fi
 
 echo ""
-log "${PREFIX}--- Règles ipshield à retirer ---"
+log "${PREFIX}--- ipshield rules to remove ---"
 case "$FW" in
   iptables|nftables|ufw)
     if command -v iptables >/dev/null 2>&1; then
       rules_input="$(show_iptables_rules INPUT)"
       if [ -n "$rules_input" ]; then
-        echo "  INPUT :"
+        echo "  INPUT:"
         echo "$rules_input" | awk '{print "    " $0}'
       else
-        echo "  INPUT : aucune règle ipshield présente."
+        echo "  INPUT: no ipshield rule present."
       fi
       if [ "$DOCKER_PRESENT" -eq 1 ]; then
         rules_docker="$(show_iptables_rules DOCKER-USER)"
         if [ -n "$rules_docker" ]; then
-          echo "  DOCKER-USER :"
+          echo "  DOCKER-USER:"
           echo "$rules_docker" | awk '{print "    " $0}'
         else
-          echo "  DOCKER-USER : aucune règle ipshield présente."
+          echo "  DOCKER-USER: no ipshield rule present."
         fi
       fi
     fi
     if [ "$FW" = "ufw" ] && [ -f /etc/ufw/before.rules ]; then
       ufw_rules="$(grep -E "match-set ($SET_NAME|$WHITELIST_SET_NAME) src" /etc/ufw/before.rules || true)"
       if [ -n "$ufw_rules" ]; then
-        echo "  /etc/ufw/before.rules :"
+        echo "  /etc/ufw/before.rules:"
         echo "$ufw_rules" | awk '{print "    " $0}'
       else
-        echo "  /etc/ufw/before.rules : aucune règle ipshield présente."
+        echo "  /etc/ufw/before.rules: no ipshield rule present."
       fi
     fi
     ;;
@@ -251,27 +252,27 @@ case "$FW" in
     if [ -n "$fw_rules" ]; then
       echo "$fw_rules" | awk '{print "    " $0}'
     else
-      echo "  Aucune règle ipshield (firewalld --direct) présente."
+      echo "  No ipshield rule (firewalld --direct) present."
     fi
     ;;
-  aucun)
-    echo "  (aucun firewall actif)"
+  none)
+    echo "  (no active firewall)"
     ;;
 esac
 
 echo ""
-log "${PREFIX}--- ipsets à détruire ---"
+log "${PREFIX}--- ipsets to destroy ---"
 for set in "$SET_NAME" "$WHITELIST_SET_NAME"; do
   if ipset list -n 2>/dev/null | awk -v s="$set" '$0==s{found=1} END{exit(found?0:1)}'; then
     count="$(ipset list -t "$set" 2>/dev/null | awk -F': ' '/Number of entries/{print $2; exit}')"
-    echo "  $set ($count entrée(s))"
+    echo "  $set ($count entry(ies))"
   else
-    echo "  $set : absent"
+    echo "  $set: absent"
   fi
 done
 
 echo ""
-log "${PREFIX}--- Configs rsyslog + logrotate ---"
+log "${PREFIX}--- rsyslog + logrotate configs ---"
 log_configs_list=(/etc/rsyslog.d/30-blocked-ips.conf /etc/logrotate.d/update-blocklist /etc/logrotate.d/blocked-ips)
 log_configs_found=0
 for f in "${log_configs_list[@]}"; do
@@ -281,44 +282,44 @@ for f in "${log_configs_list[@]}"; do
   fi
 done
 if [ "$log_configs_found" -eq 0 ]; then
-  echo "  (aucune)"
+  echo "  (none)"
 elif [ "$APPLY" -eq 1 ]; then
-  echo "  → un prompt séparé proposera de les retirer."
+  echo "  -> a separate prompt will offer to remove them."
 fi
 
 echo ""
 log "${PREFIX}--- Cron ---"
 cron_files="$(grep -lE "update-blocklist\.sh" /etc/crontab /etc/cron.d/* /var/spool/cron/* /var/spool/cron/crontabs/* 2>/dev/null || true)"
 if [ -n "$cron_files" ]; then
-  echo "  Lignes cron détectées :"
+  echo "  Cron lines detected:"
   echo "$cron_files" | while read -r f; do
     echo "    --- $f ---"
     grep -nE "update-blocklist\.sh" "$f" | awk '{print "      " $0}'
   done
   if [ "$APPLY" -eq 1 ]; then
-    echo "  → le crontab de root sera proposé à la suppression (prompt séparé)."
-    echo "  → /etc/crontab et /etc/cron.d/* ne sont jamais modifiés (à faire à la main)."
+    echo "  -> root's crontab will be offered for removal (separate prompt)."
+    echo "  -> /etc/crontab and /etc/cron.d/* are never modified (do this manually)."
   fi
 else
-  echo "  Aucune ligne cron détectée."
+  echo "  No cron line detected."
 fi
 
 echo ""
 
 # --- Dry-run mode: exit here ---
 if [ "$APPLY" -eq 0 ]; then
-  log "[DRY-RUN] Pour appliquer réellement : relancez avec --apply"
+  log "[DRY-RUN] To actually apply: re-run with --apply"
   exit 0
 fi
 
 # --- Confirmation ---
-if ! ask_yes_no "Confirmer la désinstallation ?" non; then
-  log "Annulation."
+if ! ask_yes_no "Confirm uninstall?" no; then
+  log "Cancelled."
   exit 0
 fi
 
 # --- Apply ---
-log "Suppression des règles..."
+log "Removing rules..."
 case "$FW" in
   iptables|nftables)
     remove_iptables_rules INPUT
@@ -337,10 +338,10 @@ case "$FW" in
   ufw)
     if [ -f /etc/ufw/before.rules ] && grep -qE "match-set ($SET_NAME|$WHITELIST_SET_NAME) src" /etc/ufw/before.rules; then
       if [ -f /etc/ufw/before.rules.bak ]; then
-        log "Restauration de /etc/ufw/before.rules.bak."
+        log "Restoring /etc/ufw/before.rules.bak."
         cp /etc/ufw/before.rules.bak /etc/ufw/before.rules
       else
-        log "Pas de before.rules.bak : suppression ligne par ligne."
+        log "No before.rules.bak: removing line by line."
         sed -i "/match-set $SET_NAME src/d; /match-set $WHITELIST_SET_NAME src/d" /etc/ufw/before.rules
       fi
       ufw reload
@@ -351,13 +352,13 @@ case "$FW" in
     ;;
 esac
 
-log "Destruction des ipsets..."
+log "Destroying ipsets..."
 for set in "$SET_NAME" "$WHITELIST_SET_NAME"; do
   if ipset list -n 2>/dev/null | awk -v s="$set" '$0==s{found=1} END{exit(found?0:1)}'; then
     if ipset destroy "$set" 2>/dev/null; then
-      log "  $set détruit."
+      log "  $set destroyed."
     else
-      err "  $set : impossible à détruire (encore référencé ?)."
+      err "  $set: cannot destroy (still referenced?)."
     fi
   fi
 done
@@ -368,20 +369,20 @@ if command -v crontab >/dev/null 2>&1; then
   ipshield_lines="$(printf '%s\n' "$current_cron" | grep -E "update-blocklist\.sh" || true)"
   if [ -n "$ipshield_lines" ]; then
     echo ""
-    log "Lignes cron ipshield trouvées dans le crontab de root :"
+    log "ipshield cron lines found in root's crontab:"
     echo "$ipshield_lines" | awk '{print "    " $0}'
-    if ask_yes_no "Les retirer ?" oui; then
+    if ask_yes_no "Remove them?" yes; then
       new_cron="$(printf '%s\n' "$current_cron" | grep -vE "update-blocklist\.sh" || true)"
       new_cron="${new_cron%$'\n'}"
       if [ -z "$new_cron" ]; then
         crontab -r 2>/dev/null || true
-        log "Crontab de root vidé."
+        log "Root's crontab cleared."
       else
         printf '%s\n' "$new_cron" | crontab -
-        log "Crontab de root mis à jour (lignes ipshield retirées)."
+        log "Root's crontab updated (ipshield lines removed)."
       fi
     else
-      log "Lignes cron conservées."
+      log "Cron lines kept."
     fi
   fi
 fi
@@ -390,7 +391,7 @@ fi
 other_cron="$(grep -lE "update-blocklist\.sh" /etc/crontab /etc/cron.d/* 2>/dev/null || true)"
 if [ -n "$other_cron" ]; then
   echo ""
-  log "Lignes cron ipshield aussi présentes dans (à retirer manuellement) :"
+  log "ipshield cron lines also present in (remove manually):"
   echo "$other_cron" | awk '{print "    " $0}'
 fi
 
@@ -402,32 +403,32 @@ for f in "${log_configs[@]}"; do
 done
 if [ "${#present_log_configs[@]}" -gt 0 ]; then
   echo ""
-  log "Configs rsyslog + logrotate ipshield trouvées :"
+  log "ipshield rsyslog + logrotate configs found:"
   for f in "${present_log_configs[@]}"; do
     echo "    $f"
   done
-  if ask_yes_no "Les retirer ?" oui; then
+  if ask_yes_no "Remove them?" yes; then
     restart_rsyslog=0
     for f in "${present_log_configs[@]}"; do
       if rm -f "$f" 2>/dev/null; then
-        log "  $f supprimé."
+        log "  $f removed."
         [[ "$f" == /etc/rsyslog.d/* ]] && restart_rsyslog=1
       else
-        err "  Impossible de retirer $f."
+        err "  Cannot remove $f."
       fi
     done
     if [ "$restart_rsyslog" -eq 1 ]; then
       if systemctl restart rsyslog 2>/dev/null; then
-        log "rsyslog redémarré."
+        log "rsyslog restarted."
       else
-        err "Impossible de redémarrer rsyslog."
+        err "Cannot restart rsyslog."
       fi
     fi
-    log "Note : les fichiers de log /var/log/update-blocklist.log et /var/log/blocked-ips.log sont conservés."
+    log "Note: log files /var/log/update-blocklist.log and /var/log/blocked-ips.log are kept."
   else
-    log "Configs conservées."
+    log "Configs kept."
   fi
 fi
 
 echo ""
-log "Désinstallation terminée."
+log "Uninstall complete."

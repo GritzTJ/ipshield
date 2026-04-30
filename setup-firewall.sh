@@ -8,52 +8,52 @@ case "${1:-}" in
     cat <<'EOF'
 Usage: setup-firewall.sh
 
-Script interactif d'installation et de configuration du firewall.
-Détecte le firewall actif, propose un choix parmi iptables, nftables,
-firewalld et ufw, puis effectue la transition.
+Interactive script that installs and configures a firewall.
+Detects the active firewall, offers a choice among iptables, nftables,
+firewalld and ufw, then performs the transition.
 
-Avant activation, détecte automatiquement les ports TCP en écoute
-(non-loopback) et propose de les autoriser pour éviter de couper
-des services exposés (SSH, web, etc.).
+Before activation, automatically detects listening TCP ports
+(non-loopback) and offers to allow them, to avoid breaking exposed
+services (SSH, web, etc.).
 EOF
     exit 0 ;;
 esac
 
 # --- Functions ---
 log() { echo "$*"; }
-err() { echo "ERREUR : $*" >&2; }
+err() { echo "ERROR: $*" >&2; }
 
 need_cmd() {
-  command -v "$1" >/dev/null 2>&1 || { err "commande manquante : $1"; exit 1; }
+  command -v "$1" >/dev/null 2>&1 || { err "missing command: $1"; exit 1; }
 }
 
 # --- Uniform yes/no prompt with default ---
-# Usage: ask_yes_no "Question" oui|non
+# Usage: ask_yes_no "Question" yes|no
 # Returns: 0 if yes, 1 if no. Empty input = default. Invalid input = re-ask.
 ask_yes_no() {
   local prompt="$1"
   local default="$2"
   local hint
-  if [ "$default" = "oui" ]; then
-    hint="[Oui/non]"
+  if [ "$default" = "yes" ]; then
+    hint="[Yes/no]"
   else
-    hint="[oui/Non]"
+    hint="[yes/No]"
   fi
   local ans
   while true; do
-    read -rp "$prompt $hint : " ans
+    read -rp "$prompt $hint: " ans
     [ -z "$ans" ] && ans="$default"
     case "${ans,,}" in
-      oui|o|yes|y) return 0 ;;
-      non|n|no)    return 1 ;;
-      *) echo "  Réponse invalide. Tapez oui/non (ou Entrée pour [$default])." ;;
+      yes|y|oui|o) return 0 ;;
+      no|n|non)    return 1 ;;
+      *) echo "  Invalid answer. Type yes/no (or Enter for [$default])." ;;
     esac
   done
 }
 
 # --- Root check ---
 if [ "$(id -u)" -ne 0 ]; then
-  err "ce script doit être exécuté en tant que root."
+  err "this script must be run as root."
   exit 1
 fi
 
@@ -66,7 +66,7 @@ if command -v apt >/dev/null 2>&1; then
 elif command -v dnf >/dev/null 2>&1; then
   PKG_MANAGER="dnf"
 else
-  err "gestionnaire de paquets non supporté (apt ou dnf requis)."
+  err "unsupported package manager (apt or dnf required)."
   exit 1
 fi
 
@@ -99,7 +99,7 @@ detect_firewall() {
     fi
   fi
 
-  echo "aucun"
+  echo "none"
 }
 
 DETECTED="$(detect_firewall)"
@@ -107,14 +107,14 @@ DETECTED="$(detect_firewall)"
 # --- Cron configuration (idempotent interactive prompt) ---
 configure_cron() {
   echo ""
-  if ! ask_yes_no "Configurer le cron ipshield maintenant ?" oui; then
-    log "Cron non configuré. Pour le faire plus tard, relancez ./setup-firewall.sh."
+  if ! ask_yes_no "Configure the ipshield cron now?" yes; then
+    log "Cron not configured. To do it later, re-run ./setup-firewall.sh."
     return 0
   fi
 
   # Check that crontab is available
   if ! command -v crontab >/dev/null 2>&1; then
-    err "commande 'crontab' non disponible — installation cron à faire manuellement."
+    err "'crontab' command not available -- install cron manually."
     return 0
   fi
 
@@ -133,28 +133,28 @@ configure_cron() {
     }')"
   [ -n "$existing_path" ] && script_path="$existing_path"
 
-  read -rp "Chemin de update-blocklist.sh [$script_path] : " ans
+  read -rp "Path to update-blocklist.sh [$script_path]: " ans
   [ -n "$ans" ] && script_path="$ans"
   if [ ! -x "$script_path" ]; then
-    err "$script_path n'existe pas ou n'est pas exécutable. Cron non configuré."
+    err "$script_path does not exist or is not executable. Cron not configured."
     return 0
   fi
 
   log_path="/var/log/update-blocklist.log"
-  read -rp "Fichier de log [$log_path] : " ans
+  read -rp "Log file [$log_path]: " ans
   [ -n "$ans" ] && log_path="$ans"
 
-  read -rp "Email pour notification d'erreurs (vide = pas de MAILTO) : " mailto
+  read -rp "Email for error notifications (empty = no MAILTO): " mailto
   if [ -n "$mailto" ] && ! [[ "$mailto" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
-    err "Adresse email invalide. Cron non configuré."
+    err "Invalid email address. Cron not configured."
     return 0
   fi
 
   reboot_delay=60
-  read -rp "Délai @reboot en secondes (laisse Docker démarrer) [$reboot_delay] : " ans
+  read -rp "@reboot delay in seconds (lets Docker start) [$reboot_delay]: " ans
   if [ -n "$ans" ]; then
     if ! [[ "$ans" =~ ^[0-9]+$ ]]; then
-      err "Délai invalide. Cron non configuré."
+      err "Invalid delay. Cron not configured."
       return 0
     fi
     reboot_delay="$ans"
@@ -192,25 +192,25 @@ configure_cron() {
   fi
 
   echo ""
-  echo "=== Crontab actuel (root) ==="
-  if [ -z "$current_cron" ]; then echo "(vide)"; else echo "$current_cron"; fi
+  echo "=== Current crontab (root) ==="
+  if [ -z "$current_cron" ]; then echo "(empty)"; else echo "$current_cron"; fi
   echo ""
-  echo "=== Crontab après modification ==="
+  echo "=== Crontab after change ==="
   echo "$new_cron"
   echo ""
 
   if [ "$current_cron" = "$new_cron" ]; then
-    log "Aucun changement nécessaire."
+    log "No change needed."
     return 0
   fi
 
-  if ! ask_yes_no "Appliquer ?" oui; then
-    log "Cron non modifié."
+  if ! ask_yes_no "Apply?" yes; then
+    log "Cron not modified."
     return 0
   fi
 
   printf '%s\n' "$new_cron" | crontab -
-  log "Crontab mis à jour."
+  log "Crontab updated."
 }
 
 # --- Helper: install or update a config file ---
@@ -223,18 +223,18 @@ _install_config() {
 
   if [ -f "$path" ]; then
     if [ "$(cat "$path")" = "$content" ]; then
-      log "  $desc : déjà à jour ($path)"
+      log "  $desc: already up-to-date ($path)"
       return 1
     fi
-    log "  $desc : contenu différent ($path)"
-    if ! ask_yes_no "  Écraser ?" non; then
-      log "  Conservé tel quel."
+    log "  $desc: content differs ($path)"
+    if ! ask_yes_no "  Overwrite?" no; then
+      log "  Kept as-is."
       return 1
     fi
   fi
   printf '%s\n' "$content" > "$path"
   chmod 644 "$path"
-  log "  $desc : installé ($path)"
+  log "  $desc: installed ($path)"
   return 0
 }
 
@@ -250,22 +250,22 @@ configure_conf() {
 
   echo ""
   if [ -f "$conf_path" ]; then
-    log "Configuration $conf_path : deja presente, conservee telle quelle."
-    log "  Pour reinitialiser depuis l'exemple : sudo rm $conf_path && relance setup-firewall.sh."
+    log "Configuration $conf_path: already present, kept as-is."
+    log "  To reset from the example: sudo rm $conf_path && re-run setup-firewall.sh."
     return 0
   fi
 
   if [ ! -f "$example" ]; then
-    err "$example introuvable. Impossible d'initialiser $conf_path."
-    err "  Copie manuellement le fichier depuis le repo, puis relance setup-firewall.sh."
+    err "$example not found. Cannot initialise $conf_path."
+    err "  Copy the file manually from the repo, then re-run setup-firewall.sh."
     return 1
   fi
 
-  log "Installation de $conf_path depuis $example..."
+  log "Installing $conf_path from $example..."
   cp "$example" "$conf_path"
   chown root:root "$conf_path"
   chmod 600 "$conf_path"
-  log "  Configuration installee. Edite-la si besoin (whitelist, sources personnalisees, etc.)."
+  log "  Configuration installed. Edit if needed (whitelist, custom sources, etc.)."
 }
 
 # --- Logs configuration (rsyslog filter + logrotate) ---
@@ -280,18 +280,18 @@ configure_logs() {
 
   if [ "$has_rsyslog" -eq 1 ]; then
     # rsyslog active: single prompt
-    if ! ask_yes_no "Configurer le filtre rsyslog + logrotate pour les logs ipshield ?" oui; then
-      log "Logs non configurés. Pour le faire plus tard, relancez ./setup-firewall.sh."
+    if ! ask_yes_no "Configure the rsyslog filter + logrotate for ipshield logs?" yes; then
+      log "Logs not configured. To do it later, re-run ./setup-firewall.sh."
       return 0
     fi
   else
     # rsyslog absent: inform then propose install
-    log "rsyslog n'est pas actif sur ce système."
-    log "  - Avec rsyslog  : fichier dédié /var/log/blocked-ips.log avec rotation."
-    log "  - Sans rsyslog  : logs dans journald, via 'journalctl -k --grep BLOCKED:'"
+    log "rsyslog is not active on this system."
+    log "  - With rsyslog : dedicated /var/log/blocked-ips.log file with rotation."
+    log "  - Without rsyslog: logs in journald, via 'journalctl -k --grep BLOCKED:'"
     echo ""
-    if ask_yes_no "Installer rsyslog et configurer le filtre + logrotate ?" oui; then
-      log "Installation de rsyslog..."
+    if ask_yes_no "Install rsyslog and configure the filter + logrotate?" yes; then
+      log "Installing rsyslog..."
       if [ "$PKG_MANAGER" = "apt" ]; then
         apt install -y rsyslog
       else
@@ -301,19 +301,19 @@ configure_logs() {
       systemctl start rsyslog 2>/dev/null || true
       if systemctl is-active --quiet rsyslog 2>/dev/null; then
         has_rsyslog=1
-        log "rsyslog installé et actif."
+        log "rsyslog installed and active."
       else
-        err "rsyslog installé mais pas actif après start. Le filtre sera ignoré."
-        log "Pour consulter les logs : journalctl -k --grep 'BLOCKED:'"
+        err "rsyslog installed but not active after start. The filter will be ignored."
+        log "To view logs: journalctl -k --grep 'BLOCKED:'"
       fi
     else
       # rsyslog declined: offer logrotate alone (useful for /var/log/update-blocklist.log)
-      if ! ask_yes_no "Installer quand même logrotate seul (sans filtre rsyslog) ?" oui; then
-        log "Logs non configurés. Tu peux consulter les paquets bloqués via :"
+      if ! ask_yes_no "Install logrotate alone anyway (without the rsyslog filter)?" yes; then
+        log "Logs not configured. View blocked packets via:"
         log "  journalctl -k --grep 'BLOCKED:'"
         return 0
       fi
-      log "Installation de logrotate uniquement (sans filtre rsyslog)."
+      log "Installing logrotate only (without the rsyslog filter)."
     fi
   fi
 
@@ -351,7 +351,7 @@ configure_logs() {
   local need_rsyslog_restart=0
 
   if [ "$has_rsyslog" -eq 1 ]; then
-    if _install_config /etc/rsyslog.d/30-blocked-ips.conf "$rsyslog_content" "Filtre rsyslog"; then
+    if _install_config /etc/rsyslog.d/30-blocked-ips.conf "$rsyslog_content" "rsyslog filter"; then
       need_rsyslog_restart=1
     fi
   fi
@@ -360,9 +360,9 @@ configure_logs() {
 
   if [ "$need_rsyslog_restart" -eq 1 ]; then
     if systemctl restart rsyslog 2>/dev/null; then
-      log "rsyslog redémarré."
+      log "rsyslog restarted."
     else
-      err "Impossible de redémarrer rsyslog. Faites-le manuellement (systemctl restart rsyslog)."
+      err "Cannot restart rsyslog. Do it manually (systemctl restart rsyslog)."
     fi
   fi
 }
@@ -378,7 +378,7 @@ if command -v nft >/dev/null 2>&1; then
   # named+offset on newer). The trailing ";" anchors the value so we don't
   # match -100, -101, etc.
   if nft list chain inet admin_access input 2>/dev/null | grep -qE "priority [^;]*-[[:space:]]*10[[:space:]]*;"; then
-    log "Migration : chaîne 'inet admin_access input' détectée à priorité -10 (ancien bug)."
+    log "Migration: 'inet admin_access input' chain detected at priority -10 (legacy bug)."
     existing_ports="$(nft list chain inet admin_access input 2>/dev/null \
       | awk '/tcp dport [0-9]+ accept/{for(i=1;i<=NF;i++) if ($i=="dport") print $(i+1)}' \
       | tr '\n' ' ' | sed 's/ *$//')"
@@ -388,57 +388,57 @@ if command -v nft >/dev/null 2>&1; then
       for p in $existing_ports; do
         nft add rule inet admin_access input tcp dport "$p" accept
       done
-      log "  Règles restaurées : ports $existing_ports"
+      log "  Rules restored: ports $existing_ports"
     fi
-    log "  Priorité corrigée à 10 → le blocklist (priorité 0) s'évalue désormais AVANT."
+    log "  Priority corrected to 10 -> the blocklist (priority 0) now evaluates BEFORE."
   fi
 fi
 
 # --- Detection result display ---
 echo ""
-if [ "$DETECTED" = "aucun" ]; then
-  log "Aucun firewall actif détecté sur ce système."
+if [ "$DETECTED" = "none" ]; then
+  log "No active firewall detected on this system."
 else
-  log "Firewall actif détecté : $DETECTED"
+  log "Active firewall detected: $DETECTED"
 fi
 
 # --- Selection menu ---
 echo ""
-log "Choisissez le firewall à installer et activer :"
+log "Choose the firewall to install and enable:"
 echo ""
 
 options=("iptables" "nftables" "firewalld" "ufw")
 descriptions=(
-  "classique, compatible partout, simple"
-  "successeur d'iptables, performant, syntaxe unifiée"
-  "gestion par zones, rechargement dynamique, courant sur Fedora/RHEL"
-  "simple d'utilisation, courant sur Ubuntu"
+  "classic, universally compatible, simple"
+  "iptables successor, performant, unified syntax"
+  "zone-based management, dynamic reload, common on Fedora/RHEL"
+  "user-friendly, common on Ubuntu"
 )
 
 for i in "${!options[@]}"; do
   num=$((i + 1))
-  marqueur=""
+  marker=""
   if [ "${options[$i]}" = "$DETECTED" ]; then
-    marqueur=" (actif)"
+    marker=" (active)"
   fi
-  echo "  $num) ${options[$i]} — ${descriptions[$i]}${marqueur}"
+  echo "  $num) ${options[$i]} -- ${descriptions[$i]}${marker}"
 done
 
 echo ""
-read -rp "Votre choix [1-4] : " choix
+read -rp "Your choice [1-4]: " choice
 
-case "$choix" in
+case "$choice" in
   1) FIREWALL="iptables" ;;
   2) FIREWALL="nftables" ;;
   3) FIREWALL="firewalld" ;;
   4) FIREWALL="ufw" ;;
-  *) err "choix invalide : $choix"; exit 1 ;;
+  *) err "invalid choice: $choice"; exit 1 ;;
 esac
 
 # --- Check if already active ---
 if [ "$FIREWALL" = "$DETECTED" ]; then
   echo ""
-  log "$FIREWALL est déjà actif sur ce système (pas de transition nécessaire)."
+  log "$FIREWALL is already active on this system (no transition needed)."
   configure_conf
   configure_cron
   configure_logs
@@ -446,7 +446,7 @@ if [ "$FIREWALL" = "$DETECTED" ]; then
 fi
 
 echo ""
-log "Installation et activation de : $FIREWALL"
+log "Installing and enabling: $FIREWALL"
 
 # --- Listening TCP ports detection (non-loopback) ---
 # Pre-fills the list of ports to allow before activating the new firewall,
@@ -482,20 +482,20 @@ LISTENING="$(detect_listening_ports)"
 
 echo ""
 if [ -n "$LISTENING" ]; then
-  log "Ports TCP actuellement en écoute (non-loopback) :"
+  log "TCP ports currently listening (non-loopback):"
   while IFS=' ' read -r port proc; do
     printf "  %-12s %s\n" "${port}/tcp" "$proc"
   done <<< "$LISTENING"
   echo ""
   DEFAULT_PORTS="$(echo "$LISTENING" | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')"
-  read -rp "Ports à ouvrir avant activation (défaut: $DEFAULT_PORTS, éditer la liste ou 'non' pour passer) : " SAFE_PORTS
+  read -rp "Ports to open before activation (default: $DEFAULT_PORTS, edit the list or 'no' to skip): " SAFE_PORTS
   [ -z "$SAFE_PORTS" ] && SAFE_PORTS="$DEFAULT_PORTS"
 else
-  read -rp "Ports à ouvrir avant activation (séparés par espaces, vide pour passer) : " SAFE_PORTS
+  read -rp "Ports to open before activation (space-separated, empty to skip): " SAFE_PORTS
 fi
 
 # Handle explicit refusal
-if [ "$SAFE_PORTS" = "non" ] || [ "$SAFE_PORTS" = "no" ] || [ "$SAFE_PORTS" = "n" ]; then
+if [ "$SAFE_PORTS" = "no" ] || [ "$SAFE_PORTS" = "n" ] || [ "$SAFE_PORTS" = "non" ]; then
   SAFE_PORTS=""
 fi
 
@@ -503,7 +503,7 @@ fi
 if [ -n "$SAFE_PORTS" ]; then
   for p in $SAFE_PORTS; do
     if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
-      err "port invalide : $p"
+      err "invalid port: $p"
       exit 1
     fi
   done
@@ -516,27 +516,27 @@ fi
 # the previous firewall on error or interruption.
 rollback() {
   if [ "${ROLLBACK_ARMED:-0}" -eq 1 ]; then
-    err "échec détecté — tentative de réactivation de $DETECTED..."
+    err "failure detected -- attempting to re-enable $DETECTED..."
     case "$DETECTED" in
       firewalld)
-        if systemctl start firewalld 2>/dev/null; then log "firewalld réactivé."
-        else err "impossible de réactiver firewalld."; fi ;;
+        if systemctl start firewalld 2>/dev/null; then log "firewalld re-enabled."
+        else err "cannot re-enable firewalld."; fi ;;
       ufw)
-        if ufw --force enable 2>/dev/null; then log "ufw réactivé."
-        else err "impossible de réactiver ufw."; fi ;;
+        if ufw --force enable 2>/dev/null; then log "ufw re-enabled."
+        else err "cannot re-enable ufw."; fi ;;
       nftables)
-        if systemctl start nftables 2>/dev/null; then log "nftables réactivé."
-        else err "impossible de réactiver nftables."; fi ;;
+        if systemctl start nftables 2>/dev/null; then log "nftables re-enabled."
+        else err "cannot re-enable nftables."; fi ;;
       iptables)
         if [ -n "${IPTABLES_BACKUP:-}" ] && [ -f "$IPTABLES_BACKUP" ]; then
-          if iptables-restore < "$IPTABLES_BACKUP" 2>/dev/null; then log "Règles iptables restaurées."
-          else err "impossible de restaurer les règles iptables."; fi
+          if iptables-restore < "$IPTABLES_BACKUP" 2>/dev/null; then log "iptables rules restored."
+          else err "cannot restore iptables rules."; fi
         else
-          err "aucune sauvegarde iptables disponible."
+          err "no iptables backup available."
         fi
         if [ -n "${IPTABLES_BACKUP6:-}" ] && [ -f "$IPTABLES_BACKUP6" ]; then
-          if ip6tables-restore < "$IPTABLES_BACKUP6" 2>/dev/null; then log "Règles ip6tables restaurées."
-          else err "impossible de restaurer les règles ip6tables."; fi
+          if ip6tables-restore < "$IPTABLES_BACKUP6" 2>/dev/null; then log "ip6tables rules restored."
+          else err "cannot restore ip6tables rules."; fi
         fi ;;
     esac
   fi
@@ -544,9 +544,9 @@ rollback() {
 trap rollback EXIT INT TERM
 
 # --- Deactivate old firewall ---
-if [ "$DETECTED" != "aucun" ]; then
+if [ "$DETECTED" != "none" ]; then
   ROLLBACK_ARMED=1
-  log "Désactivation de l'ancien firewall : $DETECTED"
+  log "Disabling old firewall: $DETECTED"
   case "$DETECTED" in
     firewalld)
       systemctl stop firewalld
@@ -575,19 +575,19 @@ if [ "$DETECTED" != "aucun" ]; then
           ip6tables -t "$table" -X 2>/dev/null || true
         done
       fi
-      log "Tables iptables/ip6tables vidées (flush + delete chains)."
+      log "iptables/ip6tables tables flushed (flush + delete chains)."
       ;;
   esac
-  log "$DETECTED désactivé."
+  log "$DETECTED disabled."
 fi
 
 # --- Install new firewall ---
-log "Installation du paquet $FIREWALL..."
+log "Installing $FIREWALL package..."
 if [ "$PKG_MANAGER" = "apt" ]; then
   apt update -qq
 fi
 # `ipset` is installed alongside the firewall (dependency of update-blocklist.sh,
-# often missing on minimal Debian, would otherwise cause "commande manquante: ipset").
+# often missing on minimal Debian, would otherwise cause "missing command: ipset").
 case "$FIREWALL" in
   iptables)
     if [ "$PKG_MANAGER" = "apt" ]; then
@@ -620,7 +620,7 @@ case "$FIREWALL" in
 esac
 
 # --- Enable and start the new firewall ---
-log "Activation de $FIREWALL..."
+log "Enabling $FIREWALL..."
 case "$FIREWALL" in
   iptables)
     if [ -n "$SAFE_PORTS" ]; then
@@ -630,9 +630,9 @@ case "$FIREWALL" in
           ip6tables -I INPUT -p tcp --dport "$p" -j ACCEPT
         fi
       done
-      log "Ports ouverts (iptables IPv4 + IPv6) : $SAFE_PORTS"
+      log "Ports opened (iptables IPv4 + IPv6): $SAFE_PORTS"
     fi
-    log "iptables est prêt (pas de service systemd à activer)."
+    log "iptables is ready (no systemd service to enable)."
     ;;
   nftables)
     systemctl enable nftables
@@ -645,7 +645,7 @@ case "$FIREWALL" in
       for p in $SAFE_PORTS; do
         nft add rule inet admin_access input tcp dport "$p" accept
       done
-      log "Ports ouverts (nftables) : $SAFE_PORTS"
+      log "Ports opened (nftables): $SAFE_PORTS"
     fi
     ;;
   firewalld)
@@ -656,7 +656,7 @@ case "$FIREWALL" in
         firewall-cmd --permanent --add-port="$p"/tcp
       done
       firewall-cmd --reload
-      log "Ports ouverts (firewalld) : $SAFE_PORTS"
+      log "Ports opened (firewalld): $SAFE_PORTS"
     fi
     ;;
   ufw)
@@ -664,7 +664,7 @@ case "$FIREWALL" in
       for p in $SAFE_PORTS; do
         ufw allow "$p"/tcp
       done
-      log "Ports ouverts (ufw) : $SAFE_PORTS"
+      log "Ports opened (ufw): $SAFE_PORTS"
     fi
     ufw --force enable
     ;;
@@ -673,35 +673,35 @@ esac
 # --- Post-activation verification: is the firewall responding? ---
 # If the check fails, we exit with an error; the rollback trap will re-enable
 # the old firewall (ROLLBACK_ARMED is still 1).
-log "Vérification de l'état du firewall..."
+log "Checking firewall state..."
 case "$FIREWALL" in
   iptables)
     if ! iptables -L -n >/dev/null 2>&1; then
-      err "iptables ne répond pas après installation."
+      err "iptables not responding after installation."
       exit 1
     fi
     ;;
   nftables)
     if ! systemctl is-active --quiet nftables; then
-      err "nftables n'est pas actif après start (systemctl is-active a échoué)."
+      err "nftables not active after start (systemctl is-active failed)."
       exit 1
     fi
     ;;
   firewalld)
     state="$(firewall-cmd --state 2>/dev/null || echo "unknown")"
     if [ "$state" != "running" ]; then
-      err "firewalld n'est pas en état 'running' (état: $state)."
+      err "firewalld not in 'running' state (state: $state)."
       exit 1
     fi
     ;;
   ufw)
     if ! ufw status 2>/dev/null | grep -qi "^Status: active"; then
-      err "ufw n'est pas actif après --force enable."
+      err "ufw not active after --force enable."
       exit 1
     fi
     ;;
 esac
-log "$FIREWALL est opérationnel."
+log "$FIREWALL is operational."
 
 # Disarm the rollback - the new firewall is active
 ROLLBACK_ARMED=0
@@ -709,11 +709,11 @@ rm -f "${IPTABLES_BACKUP:-}" "${IPTABLES_BACKUP6:-}" 2>/dev/null || true
 trap - EXIT INT TERM
 
 echo ""
-log "$FIREWALL installé et activé avec succès."
+log "$FIREWALL installed and enabled successfully."
 
 configure_conf
 configure_cron
 configure_logs
 
 echo ""
-log "Lancez maintenant update-blocklist.sh pour la première mise à jour ; le cron prendra le relais ensuite."
+log "Now run update-blocklist.sh for the first update; the cron will take over afterwards."

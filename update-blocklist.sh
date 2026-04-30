@@ -7,23 +7,23 @@ usage() {
   cat <<'EOF'
 Usage: update-blocklist.sh [OPTIONS]
 
-Met à jour un ipset de blocage à partir de listes publiques,
-puis détecte le firewall actif et applique les règles de blocage.
+Update a blocking ipset from public lists, then detect the active
+firewall and apply the blocking rules.
 
 Options:
-  -n, --dry-run       Mode simulation (aucune modification ipset/firewall)
-  -v, --verbose       Affichage détaillé (stats par source, détails du diff)
-  -c, --config FILE   Chemin du fichier de configuration
-  -h, --help          Affiche cette aide
+  -n, --dry-run       Simulation mode (no ipset/firewall change)
+  -v, --verbose       Verbose output (per-source stats, diff details)
+  -c, --config FILE   Configuration file path
+  -h, --help          Show this help
 
-Ordre de résolution : défauts → config → CLI.
+Resolution order: defaults -> config -> CLI.
 EOF
   exit 0
 }
 
 # --- Root check ---
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Erreur : ce script doit être exécuté en tant que root." >&2
+  echo "Error: this script must be run as root." >&2
   exit 1
 fi
 
@@ -37,10 +37,10 @@ while [ $# -gt 0 ]; do
     -n|--dry-run)  CLI_DRY_RUN=1; shift ;;
     -v|--verbose)  CLI_VERBOSE=1; shift ;;
     -c|--config)
-      [ $# -ge 2 ] || { echo "Erreur : --config nécessite un argument." >&2; exit 1; }
+      [ $# -ge 2 ] || { echo "Error: --config requires an argument." >&2; exit 1; }
       CONF_FILE="$2"; shift 2 ;;
     -h|--help)     usage ;;
-    *)             echo "Option inconnue : $1" >&2; usage ;;
+    *)             echo "Unknown option: $1" >&2; usage ;;
   esac
 done
 
@@ -55,19 +55,19 @@ WAN_INTERFACE=""
 # The conf file is the single source of truth. setup-firewall.sh copies it
 # from update-blocklist.conf.example when missing.
 if [ ! -f "$CONF_FILE" ]; then
-  echo "Erreur : fichier de configuration $CONF_FILE absent." >&2
-  echo "Lance ./setup-firewall.sh pour l'installer, ou copie manuellement" >&2
-  echo "update-blocklist.conf.example vers $CONF_FILE." >&2
+  echo "Error: configuration file $CONF_FILE not found." >&2
+  echo "Run ./setup-firewall.sh to install it, or manually copy" >&2
+  echo "update-blocklist.conf.example to $CONF_FILE." >&2
   exit 1
 fi
 conf_owner="$(stat -c '%u' "$CONF_FILE")"
 conf_perms="$(stat -c '%a' "$CONF_FILE")"
 if [ "$conf_owner" != "0" ]; then
-  echo "Erreur : $CONF_FILE n'appartient pas à root (uid=$conf_owner). Risque de sécurité." >&2
+  echo "Error: $CONF_FILE is not owned by root (uid=$conf_owner). Security risk." >&2
   exit 1
 fi
 if [[ "$conf_perms" =~ [2367][0-9]$ ]] || [[ "$conf_perms" =~ [0-9][2367]$ ]]; then
-  echo "Erreur : $CONF_FILE est group/world-writable (perms=$conf_perms). Risque de sécurité." >&2
+  echo "Error: $CONF_FILE is group/world-writable (perms=$conf_perms). Security risk." >&2
   exit 1
 fi
 # shellcheck source=/dev/null
@@ -79,47 +79,47 @@ fi
 
 # --- Validate required variables (defined in the conf file) ---
 if [ "${#URLS[@]}" -eq 0 ]; then
-  echo "Erreur : URLS est vide ou non defini dans $CONF_FILE." >&2
-  echo "Le fichier doit contenir un tableau URLS=(...) avec au moins une source." >&2
+  echo "Error: URLS is empty or undefined in $CONF_FILE." >&2
+  echo "The file must define a URLS=(...) array with at least one source." >&2
   exit 1
 fi
 for var in SET_NAME MIN_ENTRIES BASE_HASHSIZE BASE_MAXELEM WHITELIST_MIN_PREFIX; do
   if [ -z "${!var:-}" ]; then
-    echo "Erreur : variable requise '$var' absente ou vide dans $CONF_FILE." >&2
+    echo "Error: required variable '$var' missing or empty in $CONF_FILE." >&2
     exit 1
   fi
 done
 for var in MIN_ENTRIES BASE_HASHSIZE BASE_MAXELEM; do
   if ! [[ "${!var}" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Erreur : $var invalide ('${!var}'). Entier positif attendu." >&2
+    echo "Error: $var invalid ('${!var}'). Positive integer expected." >&2
     exit 1
   fi
 done
 
 # --- SET_NAME validation ---
 if [[ ! "$SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-  echo "Erreur : SET_NAME invalide ('$SET_NAME'). Seuls [a-zA-Z0-9_-] sont autorisés." >&2
+  echo "Error: SET_NAME invalid ('$SET_NAME'). Only [a-zA-Z0-9_-] allowed." >&2
   exit 1
 fi
 
 # --- Whitelist set name (derived from SET_NAME if undefined) ---
 : "${WHITELIST_SET_NAME:=${SET_NAME}-allow}"
 if [[ ! "$WHITELIST_SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-  echo "Erreur : WHITELIST_SET_NAME invalide ('$WHITELIST_SET_NAME'). Seuls [a-zA-Z0-9_-] sont autorisés." >&2
+  echo "Error: WHITELIST_SET_NAME invalid ('$WHITELIST_SET_NAME'). Only [a-zA-Z0-9_-] allowed." >&2
   exit 1
 fi
 if [ "${#WHITELIST_SET_NAME}" -gt 31 ]; then
-  echo "Erreur : WHITELIST_SET_NAME trop long (${#WHITELIST_SET_NAME} > 31)." >&2
+  echo "Error: WHITELIST_SET_NAME too long (${#WHITELIST_SET_NAME} > 31)." >&2
   exit 1
 fi
 if [ "$WHITELIST_SET_NAME" = "$SET_NAME" ]; then
-  echo "Erreur : WHITELIST_SET_NAME ne doit pas être identique à SET_NAME." >&2
+  echo "Error: WHITELIST_SET_NAME must differ from SET_NAME." >&2
   exit 1
 fi
 
 # --- WHITELIST_MIN_PREFIX validation ---
 if ! [[ "$WHITELIST_MIN_PREFIX" =~ ^[0-9]+$ ]] || [ "$WHITELIST_MIN_PREFIX" -lt 0 ] || [ "$WHITELIST_MIN_PREFIX" -gt 32 ]; then
-  echo "Erreur : WHITELIST_MIN_PREFIX invalide ('$WHITELIST_MIN_PREFIX'). Entier 0-32 attendu." >&2
+  echo "Error: WHITELIST_MIN_PREFIX invalid ('$WHITELIST_MIN_PREFIX'). Integer 0-32 expected." >&2
   exit 1
 fi
 
@@ -127,11 +127,11 @@ fi
 # Empty LOG_LIMIT = log everything (no rate-limit)
 if [ -n "$LOG_LIMIT" ]; then
   if ! [[ "$LOG_LIMIT" =~ ^[0-9]+/(sec|second|min|minute|hour|day)$ ]]; then
-    echo "Erreur : LOG_LIMIT invalide ('$LOG_LIMIT'). Format attendu : N/(sec|min|hour|day) ou vide." >&2
+    echo "Error: LOG_LIMIT invalid ('$LOG_LIMIT'). Expected format: N/(sec|min|hour|day) or empty." >&2
     exit 1
   fi
   if ! [[ "$LOG_BURST" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Erreur : LOG_BURST invalide ('$LOG_BURST'). Entier positif attendu." >&2
+    echo "Error: LOG_BURST invalid ('$LOG_BURST'). Positive integer expected." >&2
     exit 1
   fi
 fi
@@ -142,7 +142,7 @@ if [ -z "$WAN_INTERFACE" ]; then
   WAN_INTERFACE="$(ip -4 route get 8.8.8.8 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}')"
 fi
 if [ -n "$WAN_INTERFACE" ] && [[ ! "$WAN_INTERFACE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-  echo "Erreur : WAN_INTERFACE invalide ('$WAN_INTERFACE')." >&2
+  echo "Error: WAN_INTERFACE invalid ('$WAN_INTERFACE')." >&2
   exit 1
 fi
 
@@ -161,11 +161,11 @@ WL_TMP_FILE="${TMP_DIR}/wl_restore"
 CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize 10485760 --retry 3 --retry-delay 2 --retry-all-errors )
 
 if [ "${#TEMP_SET}" -gt 31 ]; then
-  echo "Erreur : nom de set temporaire trop long (${#TEMP_SET} > 31)" >&2
+  echo "Error: temporary set name too long (${#TEMP_SET} > 31)" >&2
   exit 1
 fi
 if [ "${#WL_TEMP_SET}" -gt 31 ]; then
-  echo "Erreur : nom de set whitelist temporaire trop long (${#WL_TEMP_SET} > 31)" >&2
+  echo "Error: temporary whitelist set name too long (${#WL_TEMP_SET} > 31)" >&2
   exit 1
 fi
 
@@ -181,7 +181,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-need_cmd() { command -v "$1" >/dev/null 2>&1 || { err "Erreur: commande manquante: $1"; exit 1; }; }
+need_cmd() { command -v "$1" >/dev/null 2>&1 || { err "Error: missing command: $1"; exit 1; }; }
 
 # --- Active firewall detection ---
 detect_firewall() {
@@ -212,7 +212,7 @@ detect_firewall() {
     fi
   fi
 
-  echo "aucun"
+  echo "none"
 }
 
 # --- Docker detection (DOCKER-USER chain) ---
@@ -347,16 +347,16 @@ apply_firewall_rules() {
   # from being falsely blocked, but container egress to a real public
   # blacklisted IP would still be dropped.
   if [ -z "$WAN_INTERFACE" ] && detect_docker; then
-    err "Avertissement : WAN_INTERFACE non detecte. La regle DOCKER-USER filtrera"
-    err "  dans les deux directions. Definir WAN_INTERFACE dans $CONF_FILE pour scoper."
+    err "Warning: WAN_INTERFACE not detected. The DOCKER-USER rule will filter"
+    err "  in both directions. Set WAN_INTERFACE in $CONF_FILE to scope it."
   fi
 
   case "$fw" in
     iptables)
-      _apply_iptables_rules INPUT && log "Règles iptables ajoutées (LOG + DROP)."
+      _apply_iptables_rules INPUT && log "iptables rules added (LOG + DROP)."
       _whitelist_or_cleanup_iptables INPUT
       if detect_docker; then
-        _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "Règles iptables DOCKER-USER ajoutées (LOG + DROP, entrée ${WAN_INTERFACE:-toutes interfaces})."
+        _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "iptables DOCKER-USER rules added (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
         _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
       fi
@@ -368,10 +368,10 @@ apply_firewall_rules() {
       # commands to nft rules while supporting ipset matching via the kernel
       # xt_set module.
       need_cmd iptables
-      _apply_iptables_rules INPUT && log "Règles nftables ajoutées via iptables-nft (LOG + DROP)."
+      _apply_iptables_rules INPUT && log "nftables rules added via iptables-nft (LOG + DROP)."
       _whitelist_or_cleanup_iptables INPUT
       if detect_docker; then
-        _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "Règles nftables DOCKER-USER ajoutées via iptables-nft (LOG + DROP, entrée ${WAN_INTERFACE:-toutes interfaces})."
+        _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "nftables DOCKER-USER rules added via iptables-nft (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
         _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
       fi
@@ -390,7 +390,7 @@ apply_firewall_rules() {
         firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 "${fw_log_args[@]}"
         firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -m set --match-set "$SET_NAME" src -j DROP
         need_reload=1
-        log "Règles firewalld ajoutées (LOG + DROP)."
+        log "firewalld rules added (LOG + DROP)."
       fi
       _whitelist_or_cleanup_firewalld INPUT && need_reload=1
       if detect_docker; then
@@ -406,7 +406,7 @@ apply_firewall_rules() {
           firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 0 "${docker_log_args[@]}"
           firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 1 "${docker_iface_args[@]}" -m set --match-set "$SET_NAME" src -j DROP
           need_reload=1
-          log "Règles firewalld DOCKER-USER ajoutées (LOG + DROP, entrée ${WAN_INTERFACE:-toutes interfaces})."
+          log "firewalld DOCKER-USER rules added (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
         fi
         _whitelist_or_cleanup_firewalld DOCKER-USER && need_reload=1
         docker_protected=1
@@ -431,7 +431,7 @@ $ufw_log_line\\
 -A ufw-before-input -m set --match-set $SET_NAME src -j DROP
         }" /etc/ufw/before.rules
         ufw reload
-        log "Règles ufw ajoutées (LOG + DROP)."
+        log "ufw rules added (LOG + DROP)."
       fi
       # Whitelist: add or remove from before.rules at the top of ufw-before-input
       local wl_marker="match-set $WHITELIST_SET_NAME src -j ACCEPT"
@@ -443,16 +443,16 @@ $ufw_log_line\\
         sed -i "/-A ufw-before-input -m set --match-set $SET_NAME src/i\\
 -A ufw-before-input -m set --match-set $WHITELIST_SET_NAME src -j ACCEPT" /etc/ufw/before.rules
         ufw reload
-        log "Règle whitelist ufw ajoutée (ACCEPT)."
+        log "ufw whitelist rule added (ACCEPT)."
       elif [ "${#WHITELIST[@]}" -eq 0 ] && [ "$wl_present" -eq 1 ]; then
         cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
         sed -i "/match-set $WHITELIST_SET_NAME src -j ACCEPT/d" /etc/ufw/before.rules
         ufw reload
-        log "Règle whitelist ufw retirée (ACCEPT)."
+        log "ufw whitelist rule removed (ACCEPT)."
       fi
       # Docker uses iptables directly, outside ufw scope
       if detect_docker; then
-        _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "Règles DOCKER-USER ajoutées (LOG + DROP, entrée ${WAN_INTERFACE:-toutes interfaces})."
+        _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "DOCKER-USER rules added (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
         _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
       fi
@@ -460,7 +460,7 @@ $ufw_log_line\\
   esac
 
   if [ "$docker_protected" -eq 1 ]; then
-    log "Docker détecté : la chaîne DOCKER-USER est protégée."
+    log "Docker detected: the DOCKER-USER chain is protected."
   fi
 }
 
@@ -476,15 +476,15 @@ need_cmd comm
 
 # --- Lock ---
 mkdir -p "$LOCK_DIR"
-log "--- Mise à jour du : $(date '+%Y-%m-%d %H:%M:%S %Z') ---"
+log "--- Update on $(date '+%Y-%m-%d %H:%M:%S %Z') ---"
 
 exec 9>"$LOCK_FILE"
-flock -n 9 || { err "Erreur : une autre instance tourne déjà."; exit 1; }
+flock -n 9 || { err "Error: another instance is already running."; exit 1; }
 
 # --- HTTP source warning ---
 for url in "${URLS[@]}"; do
   if [[ "$url" =~ ^http:// ]]; then
-    err "Avertissement : source HTTP (non chiffré) : $url"
+    err "Warning: HTTP (unencrypted) source: $url"
   fi
 done
 
@@ -503,20 +503,20 @@ for i in "${!URLS[@]}"; do
   if wait "${DL_PIDS[$i]}" 2>/dev/null; then
     ok=$((ok+1))
     DL_OK+=("$i")
-    log "Téléchargement OK : ${URLS[$i]}"
+    log "Download OK: ${URLS[$i]}"
   else
     fail=$((fail+1))
-    err "ERREUR: échec téléchargement: ${URLS[$i]}"
+    err "ERROR: download failed: ${URLS[$i]}"
   fi
 done
 
 # --- Failure policy ---
 if [ "$ok" -eq 0 ]; then
-  err "Erreur : aucune source disponible. Annulation de la mise à jour."
+  err "Error: no source available. Aborting update."
   exit 1
 fi
 if [ "$fail" -ne 0 ]; then
-  err "Avertissement : $fail source(s) indisponible(s). Mise à jour avec $ok source(s) disponible(s)."
+  err "Warning: $fail source(s) unavailable. Updating with $ok available source(s)."
 fi
 
 # --- Sequential processing: fused awk (extraction + validation) + per-source stats ---
@@ -568,7 +568,7 @@ for i in "${DL_OK[@]}"; do
   awk "$AWK_PROG" "${TMP_DIR}/dl.${i}" > "${TMP_DIR}/src.${i}"
   src_count="$(wc -l < "${TMP_DIR}/src.${i}")"
   if [ "$VERBOSE" -eq 1 ]; then
-    log "  Source $((i+1))/${#URLS[@]} : $(fmt_num "$src_count") entrées valides — ${URLS[$i]}"
+    log "  Source $((i+1))/${#URLS[@]}: $(fmt_num "$src_count") valid entries -- ${URLS[$i]}"
   fi
 done
 
@@ -587,36 +587,36 @@ if [ "${#WHITELIST[@]}" -gt 0 ]; then
     # Safeguard: reject overly broad prefixes (typo /0 = total bypass)
     prefix="${canonical##*/}"
     if [ "$prefix" -lt "$WHITELIST_MIN_PREFIX" ]; then
-      too_wide_wl+=("$entry (canonique : $canonical, préfixe /$prefix < seuil /$WHITELIST_MIN_PREFIX)")
+      too_wide_wl+=("$entry (canonical: $canonical, prefix /$prefix < threshold /$WHITELIST_MIN_PREFIX)")
       continue
     fi
     printf '%s\n' "$canonical" >> "$WL_FILE"
   done
   if [ "${#invalid_wl[@]}" -gt 0 ]; then
-    err "Erreur : entrée(s) WHITELIST invalide(s) :"
+    err "Error: invalid WHITELIST entry(ies):"
     for entry in "${invalid_wl[@]}"; do
       err "  - '$entry'"
     done
     exit 1
   fi
   if [ "${#too_wide_wl[@]}" -gt 0 ]; then
-    err "Erreur : entrée(s) WHITELIST avec préfixe trop large (risque de bypass massif) :"
+    err "Error: WHITELIST entry(ies) with overly wide prefix (massive bypass risk):"
     for entry in "${too_wide_wl[@]}"; do
       err "  - $entry"
     done
-    err "Pour autoriser un préfixe plus large, ajustez WHITELIST_MIN_PREFIX dans la config."
+    err "To allow a wider prefix, lower WHITELIST_MIN_PREFIX in the config."
     exit 1
   fi
   # Dedup + sort
   sort -u "$WL_FILE" -o "$WL_FILE"
   wl_count="$(wc -l < "$WL_FILE")"
-  log "Whitelist : $(fmt_num "$wl_count") entrée(s)."
+  log "Whitelist: $(fmt_num "$wl_count") entry(ies)."
 fi
 
 cat "${TMP_DIR}"/src.* 2>/dev/null | sort -u > "$UNIQ_FILE" || true
 
 if [ ! -s "$UNIQ_FILE" ]; then
-  err "Erreur : Aucune IP/CIDR valide récupérée. Annulation."
+  err "Error: no valid IP/CIDR retrieved. Aborting."
   exit 1
 fi
 
@@ -624,7 +624,7 @@ entries_count="$(wc -l < "$UNIQ_FILE")"
 
 # --- Minimum safety threshold ---
 if [ "$entries_count" -lt "$MIN_ENTRIES" ]; then
-  err "Erreur : seulement $(fmt_num "$entries_count") entrées (minimum attendu: $(fmt_num "$MIN_ENTRIES")). Possible anomalie source. Annulation."
+  err "Error: only $(fmt_num "$entries_count") entries (minimum expected: $(fmt_num "$MIN_ENTRIES")). Possible source anomaly. Aborting."
   exit 1
 fi
 
@@ -646,12 +646,12 @@ if [ "$hs" -lt "$BASE_HASHSIZE" ]; then
 fi
 IPSET_HASHSIZE="$hs"
 
-log "Entrées valides : $(fmt_num "$entries_count")"
-log "ipset params    : hashsize=$(fmt_num "$IPSET_HASHSIZE") maxelem=$(fmt_num "$IPSET_MAXELEM")"
+log "Valid entries : $(fmt_num "$entries_count")"
+log "ipset params  : hashsize=$(fmt_num "$IPSET_HASHSIZE") maxelem=$(fmt_num "$IPSET_MAXELEM")"
 
 # --- Dry-run mode ---
 if [ "$DRY_RUN" -eq 1 ]; then
-  log "[DRY-RUN] $(fmt_num "$entries_count") entrées seraient appliquées."
+  log "[DRY-RUN] $(fmt_num "$entries_count") entries would be applied."
   # In dry-run, also show the diff report if the set exists
   if ipset list -n 2>/dev/null | awk -v s="$SET_NAME" '$0==s{found=1} END{exit(found?0:1)}'; then
     # Pipe straight to file (avoids holding 1M+ entries in a variable)
@@ -661,21 +661,21 @@ if [ "$DRY_RUN" -eq 1 ]; then
     added="$(comm -13 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
     removed="$(comm -23 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
     unchanged="$(comm -12 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
-    log "Diff: +$(fmt_num "$added") ajoutées, -$(fmt_num "$removed") retirées, =$(fmt_num "$unchanged") inchangées"
+    log "Diff: +$(fmt_num "$added") added, -$(fmt_num "$removed") removed, =$(fmt_num "$unchanged") unchanged"
   fi
   # Whitelist: announce what would happen
   if [ "${#WHITELIST[@]}" -gt 0 ]; then
-    log "[DRY-RUN] Whitelist : $(fmt_num "$(wc -l < "$WL_FILE")") entrée(s) seraient appliquées (set $WHITELIST_SET_NAME, règle ACCEPT)."
+    log "[DRY-RUN] Whitelist: $(fmt_num "$(wc -l < "$WL_FILE")") entry(ies) would be applied (set $WHITELIST_SET_NAME, ACCEPT rule)."
   else
     if ipset list -n 2>/dev/null | awk -v s="$WHITELIST_SET_NAME" '$0==s{found=1} END{exit(found?0:1)}'; then
-      log "[DRY-RUN] Whitelist vide : le set $WHITELIST_SET_NAME et la règle ACCEPT seraient retirés."
+      log "[DRY-RUN] Empty whitelist: set $WHITELIST_SET_NAME and the ACCEPT rule would be removed."
     fi
   fi
   # Show the detected firewall even in dry-run
   DETECTED_FW="$(detect_firewall)"
-  log "[DRY-RUN] Firewall détecté : $DETECTED_FW"
+  log "[DRY-RUN] Detected firewall: $DETECTED_FW"
   if detect_docker; then
-    log "[DRY-RUN] Docker détecté : les règles seraient aussi appliquées sur DOCKER-USER."
+    log "[DRY-RUN] Docker detected: rules would also be applied on DOCKER-USER."
   fi
   exit 0
 fi
@@ -688,7 +688,7 @@ if ipset list -n 2>/dev/null | awk -v s="$SET_NAME" '$0==s{found=1} END{exit(fou
   existing_type="$(echo "$set_header" | awk -F': ' '/^Type: /{print $2; exit}')"
   existing_family="$(echo "$set_header" | awk -F': ' '/^Header: /{h=$2} END{if (h ~ /family inet6/) print "inet6"; else if (h ~ /family inet/) print "inet"; else print ""}')"
   if [ "$existing_type" != "$IPSET_TYPE" ] || [ "$existing_family" != "$IPSET_FAMILY" ]; then
-    err "Erreur : set '$SET_NAME' existe mais type/family incompatibles (type=$existing_type family=$existing_family). Attendu: type=$IPSET_TYPE family=$IPSET_FAMILY. Annulation."
+    err "Error: set '$SET_NAME' exists but type/family incompatible (type=$existing_type family=$existing_family). Expected: type=$IPSET_TYPE family=$IPSET_FAMILY. Aborting."
     exit 1
   fi
 fi
@@ -700,7 +700,7 @@ fi
 } > "$TMP_FILE"
 
 if [ "$(wc -l < "$TMP_FILE")" -le 1 ]; then
-  err "Erreur : Aucune entrée ajoutable dans restore. Annulation."
+  err "Error: no entry to add in restore. Aborting."
   exit 1
 fi
 
@@ -715,10 +715,10 @@ if [ "$VERBOSE" -eq 1 ]; then
       added="$(comm -13 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
       removed="$(comm -23 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
       unchanged="$(comm -12 "${TMP_DIR}/old_members" "$UNIQ_FILE" | wc -l)"
-      log "Diff: +$(fmt_num "$added") ajoutées, -$(fmt_num "$removed") retirées, =$(fmt_num "$unchanged") inchangées"
+      log "Diff: +$(fmt_num "$added") added, -$(fmt_num "$removed") removed, =$(fmt_num "$unchanged") unchanged"
     fi
   else
-    log "Diff: +$(fmt_num "$entries_count") ajoutées (nouveau set)"
+    log "Diff: +$(fmt_num "$entries_count") added (new set)"
   fi
 fi
 
@@ -736,7 +736,7 @@ ipset swap "$SET_NAME" "$TEMP_SET"
 ipset destroy "$TEMP_SET"
 
 total="$(ipset list -t "$SET_NAME" | awk -F': ' '/Number of entries/{print $2}')"
-log "Total d'IP bloquées : $(fmt_num "$total")"
+log "Total blocked IPs: $(fmt_num "$total")"
 
 # --- Whitelist: atomic build/swap if non-empty ---
 WL_SET_EXISTS=0
@@ -761,28 +761,28 @@ if [ "${#WHITELIST[@]}" -gt 0 ]; then
   ipset restore < "$WL_TMP_FILE"
   ipset swap "$WHITELIST_SET_NAME" "$WL_TEMP_SET"
   ipset destroy "$WL_TEMP_SET"
-  log "Whitelist active : $(fmt_num "$wl_entries") entrée(s) dans $WHITELIST_SET_NAME."
+  log "Whitelist active: $(fmt_num "$wl_entries") entry(ies) in $WHITELIST_SET_NAME."
 fi
 
 # --- Firewall rules check / apply ---
 DETECTED_FW="$(detect_firewall)"
-if [ "$DETECTED_FW" != "aucun" ]; then
+if [ "$DETECTED_FW" != "none" ]; then
   if detect_docker; then
-    log "Firewall détecté : $DETECTED_FW (Docker présent, chaîne DOCKER-USER trouvée)"
+    log "Detected firewall: $DETECTED_FW (Docker present, DOCKER-USER chain found)"
   else
-    log "Firewall détecté : $DETECTED_FW"
+    log "Detected firewall: $DETECTED_FW"
   fi
   apply_firewall_rules "$DETECTED_FW"
 else
-  err "Aucun firewall détecté. Les IP sont dans le set ipset mais aucune règle de blocage n'est active."
-  err "Lancez setup-firewall.sh pour installer un firewall, ou installez-en un manuellement."
+  err "No firewall detected. IPs are in the ipset but no blocking rule is active."
+  err "Run setup-firewall.sh to install a firewall, or install one manually."
 fi
 
 # --- Empty whitelist: destroy the set after rules have been removed ---
 if [ "${#WHITELIST[@]}" -eq 0 ] && [ "$WL_SET_EXISTS" -eq 1 ]; then
   if ipset destroy "$WHITELIST_SET_NAME" 2>/dev/null; then
-    log "Whitelist vide : ipset $WHITELIST_SET_NAME détruit."
+    log "Empty whitelist: ipset $WHITELIST_SET_NAME destroyed."
   else
-    err "Avertissement : impossible de détruire $WHITELIST_SET_NAME (encore référencé ?)."
+    err "Warning: cannot destroy $WHITELIST_SET_NAME (still referenced?)."
   fi
 fi

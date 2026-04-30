@@ -54,7 +54,7 @@ Variables (toutes définies avec leur valeur prod-ready dans le fichier d'exempl
 | `BASE_MAXELEM` | `300000` | Maxelem de base pour ipset |
 | `LOG_LIMIT` | `60/min` | Rate-limit du logging des paquets bloqués (`N/sec`, `N/min`, `N/hour`, `N/day` ; vide = pas de limite) |
 | `LOG_BURST` | `100` | Burst maximum avant que `LOG_LIMIT` s'applique |
-| `WAN_INTERFACE` | `""` (auto) | Interface WAN pour scoper la règle DOCKER-USER au trafic entrant uniquement. Vide = auto-détection via `ip route get 1.1.1.1`. À définir explicitement si l'auto-détection donne le mauvais résultat (ex : VPN). |
+| `WAN_INTERFACE` | `""` (auto) | Interface WAN pour scoper la règle DOCKER-USER au trafic entrant uniquement. Vide = auto-détection via `ip route get 8.8.8.8`. À définir explicitement si l'auto-détection donne le mauvais résultat (ex : VPN). |
 
 ### Sources par défaut
 
@@ -244,7 +244,7 @@ Sur un hôte Docker, le trafic destiné aux conteneurs (ports publiés via `-p` 
 
 Le script détecte automatiquement la présence de Docker via la chaîne `DOCKER-USER` dans iptables. Quand elle existe, les mêmes règles LOG + DROP sont appliquées sur `DOCKER-USER` en plus de `INPUT`, **scopées à l'interface WAN** (`-i $WAN_INTERFACE`) pour ne filtrer que le trafic **entrant** depuis Internet vers les conteneurs. Le trafic sortant des conteneurs (qui passe par `IN=br-xxx`) n'est jamais filtré, conformément au principe "filtrer uniquement l'entrée".
 
-**Auto-détection de l'interface WAN** : par défaut, le script détecte l'interface via `ip route get 1.1.1.1`. Si l'auto-détection donne le mauvais résultat (cas VPN/multi-homed), définir `WAN_INTERFACE="ens160"` dans `/etc/update-blocklist.conf`.
+**Auto-détection de l'interface WAN** : par défaut, le script détecte l'interface via `ip route get 8.8.8.8`. Si l'auto-détection donne le mauvais résultat (cas VPN/multi-homed), définir `WAN_INTERFACE="ens160"` dans `/etc/update-blocklist.conf`.
 
 **Filtrage des bogons (RFC 6890)** : le script rejette automatiquement toute IP/CIDR dans les plages réservées (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, multicast, etc.). Empêche un faux positif d'une source publique de bloquer le LAN ou le bridge Docker (cas réel : FireHOL Level 1 inclut les bogons par design).
 

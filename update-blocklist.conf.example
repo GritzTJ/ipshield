@@ -82,6 +82,6 @@ LOG_BURST=100
 # Le trafic SORTANT des conteneurs (qui passe par le bridge Docker br-xxx)
 # n'est jamais filtre par la blocklist, conformement au principe "filtrer
 # uniquement l'entree".
-# Vide = auto-detection via "ip route get 1.1.1.1".
+# Vide = auto-detection via "ip route get 8.8.8.8".
 # A definir explicitement si l'auto-detection donne le mauvais resultat (ex: VPN).
 WAN_INTERFACE=""

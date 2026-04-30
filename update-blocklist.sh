@@ -139,7 +139,7 @@ fi
 # --- Auto-detection de l'interface WAN si non definie ---
 # Utilise pour scoper la regle DOCKER-USER au trafic entrant uniquement.
 if [ -z "$WAN_INTERFACE" ]; then
-  WAN_INTERFACE="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}')"
+  WAN_INTERFACE="$(ip -4 route get 8.8.8.8 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}')"
 fi
 if [ -n "$WAN_INTERFACE" ] && [[ ! "$WAN_INTERFACE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
   echo "Erreur : WAN_INTERFACE invalide ('$WAN_INTERFACE')." >&2

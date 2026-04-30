@@ -2,6 +2,10 @@
 set -euo pipefail
 umask 077
 
+# Ensure /sbin and /usr/sbin are in PATH (firewall-cmd, ufw, iptables, nft,
+# ipset, ip live there on Debian/Ubuntu). Same rationale as update-blocklist.sh.
+export PATH="/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin${PATH:+:$PATH}"
+
 # --- Usage / help ---
 case "${1:-}" in
   -h|--help)

@@ -2,6 +2,13 @@
 set -euo pipefail
 umask 077
 
+# Cron on Debian/Ubuntu typically runs with PATH=/usr/bin:/bin, which omits
+# /sbin and /usr/sbin where ipset, iptables, ip6tables, nft and ip live.
+# Prepend the standard system paths so the script behaves the same under
+# cron, systemd and interactive shells. Non-existent directories are
+# harmlessly ignored by PATH lookup.
+export PATH="/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin${PATH:+:$PATH}"
+
 # --- Usage / help ---
 usage() {
   cat <<'EOF'

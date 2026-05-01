@@ -81,7 +81,8 @@ detect_firewall() {
     return
   fi
 
-  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi "active"; then
+  # Anchor the match so "Status: inactive" is not treated as "active".
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qE "^Status: active$"; then
     echo "ufw"
     return
   fi

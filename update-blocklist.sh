@@ -207,7 +207,8 @@ detect_firewall() {
     return
   fi
 
-  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi "active"; then
+  # Anchor the match so "Status: inactive" is not treated as "active".
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qE "^Status: active$"; then
     echo "ufw"
     return
   fi
@@ -439,6 +440,35 @@ apply_firewall_rules() {
       ;;
 
     ufw)
+      # Cleanup orphan ipshield rules in ufw-before-input that reference an
+      # ipset which no longer exists (typical after WHITELIST_SET_NAME rename
+      # across versions, or after a partial uninstall). Without this, the
+      # next "ufw reload" would fail with "iptables-restore: Set <X> doesn't
+      # exist", leaving the firewall in a partial state -- the kernel may
+      # then lose its ESTABLISHED,RELATED ACCEPT and break outbound DNS.
+      # Idempotent: no-op when no orphan is found.
+      if [ -f /etc/ufw/before.rules ]; then
+        local orphans=()
+        local ref_set
+        while IFS= read -r ref_set; do
+          [ -z "$ref_set" ] && continue
+          [ "$ref_set" = "$SET_NAME" ] && continue
+          [ "$ref_set" = "$WHITELIST_SET_NAME" ] && continue
+          if ipset list -n 2>/dev/null | awk -v s="$ref_set" '$0==s{f=1} END{exit(f?0:1)}'; then
+            continue  # set exists -> probably user-managed, leave alone
+          fi
+          orphans+=("$ref_set")
+        done < <(grep -oE -- "-A ufw-before-input -m set --match-set [^ ]+ src" /etc/ufw/before.rules 2>/dev/null | awk '{print $6}' | sort -u)
+        if [ "${#orphans[@]}" -gt 0 ]; then
+          cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
+          for ref_set in "${orphans[@]}"; do
+            sed -i "\\|^-A ufw-before-input -m set --match-set $ref_set src |d" /etc/ufw/before.rules
+          done
+          log "ufw: removed orphan rule(s) referencing nonexistent ipset(s): ${orphans[*]}"
+          ufw reload
+        fi
+      fi
+
       if ! grep -q "match-set $SET_NAME src" /etc/ufw/before.rules 2>/dev/null; then
         # Backup before modification (protects against sed corruption)
         cp /etc/ufw/before.rules /etc/ufw/before.rules.bak

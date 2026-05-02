@@ -24,7 +24,8 @@ This script:
   - removes ipshield rules (LOG + DROP blocklist, ACCEPT whitelist) on INPUT
     and DOCKER-USER (if Docker is present);
   - destroys ipsets $SET_NAME and $WHITELIST_SET_NAME;
-  - restores /etc/ufw/before.rules.bak if present (ufw);
+  - removes ipshield/orphan rules from /etc/ufw/before.rules line by line (ufw);
+  - optionally removes ipshield-restore.service;
   - reports (without modifying) cron lines referencing update-blocklist.sh.
 
 It does NOT uninstall the firewall or any packages (ipset, iptables, etc.).
@@ -169,12 +170,20 @@ remove_iptables_rules() {
     iptables -D "$chain" -m set --match-set "$SET_NAME" src -j DROP
   done
   # Blacklist LOG: generic removal (any limit values)
-  local rule
+  local line rule_num n
   while true; do
-    rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A $chain .*--match-set $SET_NAME src.*-j LOG --log-prefix \"BLOCKED: \"" | head -1 || true)"
-    [ -z "$rule" ] && break
-    rule="${rule/#-A /-D }"
-    eval "iptables $rule"
+    rule_num=""
+    n=0
+    while IFS= read -r line; do
+      [[ "$line" == "-A $chain "* ]] || continue
+      n=$((n + 1))
+      if printf '%s\n' "$line" | grep -qE -- "--match-set $SET_NAME src.*-j LOG --log-prefix \"BLOCKED: \""; then
+        rule_num="$n"
+        break
+      fi
+    done < <(iptables -S "$chain" 2>/dev/null || true)
+    [ -z "$rule_num" ] && break
+    iptables -D "$chain" "$rule_num"
   done
 }
 
@@ -183,12 +192,14 @@ remove_firewalld_rules() {
   local chain="$1"
   local changed=0
   local line
+  local rule_args
   while true; do
     line="$(firewall-cmd --permanent --direct --get-all-rules 2>/dev/null \
       | grep -E "^ipv4 filter $chain .*--match-set ($SET_NAME|$WHITELIST_SET_NAME) src" \
       | head -1 || true)"
     [ -z "$line" ] && break
-    eval "firewall-cmd --permanent --direct --remove-rule $line"
+    read -r -a rule_args <<< "$line"
+    firewall-cmd --permanent --direct --remove-rule "${rule_args[@]}"
     changed=1
   done
   [ "$changed" -eq 1 ] && return 0 || return 1
@@ -280,6 +291,16 @@ if [ "$log_configs_found" -eq 0 ]; then
   echo "  (none)"
 elif [ "$APPLY" -eq 1 ]; then
   echo "  -> a separate prompt will offer to remove them."
+fi
+
+echo ""
+log "${PREFIX}--- systemd restore service ---"
+restore_service="/etc/systemd/system/ipshield-restore.service"
+if [ -f "$restore_service" ]; then
+  echo "  $restore_service"
+  [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to disable and remove it."
+else
+  echo "  (none)"
 fi
 
 echo ""
@@ -383,6 +404,21 @@ for set in "$SET_NAME" "$WHITELIST_SET_NAME"; do
     fi
   fi
 done
+
+# --- Optional ipset restore service removal ---
+if [ -f "$restore_service" ]; then
+  echo ""
+  log "ipshield systemd restore service found:"
+  echo "    $restore_service"
+  if ask_yes_no "Disable and remove it?" yes; then
+    systemctl disable --now ipshield-restore.service 2>/dev/null || true
+    rm -f "$restore_service"
+    systemctl daemon-reload 2>/dev/null || true
+    log "ipshield-restore.service removed."
+  else
+    log "ipshield-restore.service kept."
+  fi
+fi
 
 # --- Optional cron line removal ---
 if command -v crontab >/dev/null 2>&1; then

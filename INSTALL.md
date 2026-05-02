@@ -169,54 +169,27 @@ On the next run, the script:
 
 > **Anti-typo safeguard**: by default, any prefix < `/8` is rejected (`WHITELIST_MIN_PREFIX=8`). This blocks the classic `0.0.0.0/0` typo that would open the whole Internet to a total bypass. To allow a wider prefix, lower `WHITELIST_MIN_PREFIX` explicitly.
 
-#### Boot-time fail-open window
+#### Boot-time ipset persistence
 
-**Problem.** At server boot, the `ipset blacklist` (which lives in RAM) is empty. Until `update-blocklist.sh` runs via the `@reboot` cron, filtering does not work:
+**Problem.** At server boot, the `ipset blacklist` (which lives in RAM) is empty unless it is restored from disk before the firewall starts. Until `update-blocklist.sh` runs via the `@reboot` cron, filtering does not work:
 
 - **iptables / nftables**: rules are not persisted to disk by default → empty tables at boot, no filtering.
-- **ufw**: `before.rules` is restored, but `--match-set blacklist src` rules match against a non-existent ipset → match silently false → blacklisted traffic passes through.
-- **firewalld**: `--direct` rules are persisted in `direct.xml` but same issue, the ipset is missing → match false.
+- **ufw / firewalld with iptables-nft**: persistent rules may reference an ipset that does not exist yet. On modern Ubuntu/Debian this can make firewall reload/start fail with `Set <name> doesn't exist`.
 
-With the default `@reboot sleep 60 && update-blocklist.sh`, the vulnerable window is **~60-90 seconds** (sleep + list download + ipset build).
+`ipshield` now supports first-class ipset persistence:
 
-**Mitigations** (by increasing complexity):
+- `update-blocklist.sh` saves the ipshield sets after each successful run when `PERSIST_IPSET=1` (default).
+- `setup-firewall.sh` can install `ipshield-restore.service`, ordered before `ufw.service`, `firewalld.service` and `nftables.service`.
+- The service restores `/var/lib/ipshield/ipset.save` before the firewall loads persistent rules.
 
-1. **Without Docker**: set the `@reboot` delay to `0` to start immediately (reduces the window to ~15s, just the download time). Choice offered by `setup-firewall.sh` step 8.
+Relevant config:
 
-2. **ipset persistence (recommended for prod)**: save the ipset after each run and restore it at boot before the firewall starts. Manual setup:
+```bash
+PERSIST_IPSET=1
+IPSET_SAVE_FILE="/var/lib/ipshield/ipset.save"
+```
 
-   ```bash
-   # Create a systemd service that restores the ipset at boot
-   sudo mkdir -p /var/lib/ipshield
-   sudo tee /etc/systemd/system/ipshield-restore.service <<'EOF'
-   [Unit]
-   Description=Restore ipshield ipsets before firewall start
-   DefaultDependencies=no
-   Before=netfilter-persistent.service nftables.service ufw.service firewalld.service
-   ConditionPathExists=/var/lib/ipshield/ipset.save
-
-   [Service]
-   Type=oneshot
-   ExecStart=/sbin/ipset restore -! -f /var/lib/ipshield/ipset.save
-   RemainAfterExit=yes
-
-   [Install]
-   WantedBy=sysinit.target
-   EOF
-   sudo systemctl enable ipshield-restore.service
-
-   # Initial save
-   sudo ipset save > /var/lib/ipshield/ipset.save
-   ```
-
-   Then add at the end of `update-blocklist.sh` (or via a separate cron):
-   ```bash
-   ipset save > /var/lib/ipshield/ipset.save
-   ```
-
-   At boot: `ipshield-restore` loads the ipset from disk BEFORE the firewall starts. `--match-set` rules match immediately. No vulnerable window.
-
-3. **Risk acceptance**: for a server behind a load balancer or with other defences (fail2ban, WAF), the 60s window may be acceptable.
+For direct `iptables`, persistence is optional: rules are not persistent by default, so the fallback is fail-open until the next cron run. For `ufw` and `firewalld`, enable the restore service.
 
 #### Migration: legacy nftables admin_access priority bug
 
@@ -233,7 +206,7 @@ iptables -S INPUT | grep blacklist-allow
 
 ### Uninstall
 
-`uninstall.sh` removes ipshield rules (LOG/DROP blocklist + ACCEPT whitelist), destroys the associated ipsets, and restores `/etc/ufw/before.rules.bak` if present. It **does not uninstall** the firewall or any packages.
+`uninstall.sh` removes ipshield rules (LOG/DROP blocklist + ACCEPT whitelist), destroys the associated ipsets, removes ipshield/orphan rules from `/etc/ufw/before.rules` line by line, and can disable/remove `ipshield-restore.service`. It **does not uninstall** the firewall or any packages.
 
 ```bash
 # Dry-run mode (default): shows what would be done
@@ -634,54 +607,27 @@ Au prochain run, le script :
 
 > **Garde-fou anti-typo** : par défaut, tout préfixe < `/8` est refusé (`WHITELIST_MIN_PREFIX=8`). Cela bloque le piège classique d'un `0.0.0.0/0` accidentel qui ouvrirait tout Internet en bypass total. Pour autoriser un préfixe plus large, abaisser `WHITELIST_MIN_PREFIX` explicitement.
 
-#### Fenêtre de fail-open au reboot
+#### Persistance ipset au reboot
 
-**Problème.** Au reboot du serveur, l'`ipset blacklist` (qui vit en RAM) est vide. Tant que `update-blocklist.sh` n'a pas tourné via la cron `@reboot`, le filtrage ne fonctionne pas :
+**Problème.** Au reboot du serveur, l'`ipset blacklist` (qui vit en RAM) est vide s'il n'est pas restauré depuis le disque avant le démarrage du firewall. Tant que `update-blocklist.sh` n'a pas tourné via la cron `@reboot`, le filtrage ne fonctionne pas :
 
 - **iptables / nftables** : les règles ne sont pas persistées sur disque par défaut → tables vides au boot, aucun blocage.
-- **ufw** : `before.rules` est restauré, mais les règles `--match-set blacklist src` matchent contre un ipset qui n'existe pas → match silencieusement faux → trafic blacklisté passe.
-- **firewalld** : les règles `--direct` sont persistées dans `direct.xml` mais idem, ipset absent → match faux.
+- **ufw / firewalld avec iptables-nft** : les règles persistantes peuvent référencer un ipset qui n'existe pas encore. Sur Ubuntu/Debian récents, cela peut faire échouer le reload/démarrage du firewall avec `Set <name> doesn't exist`.
 
-Avec le défaut `@reboot sleep 60 && update-blocklist.sh`, la fenêtre vulnérable est **~60-90 secondes** (sleep + téléchargement listes + build ipset).
+`ipshield` gère maintenant la persistance ipset nativement :
 
-**Mitigations** (par ordre de simplicité) :
+- `update-blocklist.sh` sauvegarde les sets ipshield après chaque run réussi quand `PERSIST_IPSET=1` (défaut).
+- `setup-firewall.sh` peut installer `ipshield-restore.service`, ordonné avant `ufw.service`, `firewalld.service` et `nftables.service`.
+- Le service restaure `/var/lib/ipshield/ipset.save` avant que le firewall charge ses règles persistantes.
 
-1. **Si pas de Docker** : configurer le délai `@reboot` à `0` pour démarrer immédiatement (réduit la fenêtre à ~15s, le temps du téléchargement). Choix proposé par `setup-firewall.sh` étape 8.
+Configuration :
 
-2. **Persistance ipset (recommandé pour prod)** : sauvegarder l'ipset après chaque run et le restaurer au boot avant le firewall. Setup manuel :
+```bash
+PERSIST_IPSET=1
+IPSET_SAVE_FILE="/var/lib/ipshield/ipset.save"
+```
 
-   ```bash
-   # Créer un service systemd qui restaure l'ipset au boot
-   sudo mkdir -p /var/lib/ipshield
-   sudo tee /etc/systemd/system/ipshield-restore.service <<'EOF'
-   [Unit]
-   Description=Restore ipshield ipsets before firewall start
-   DefaultDependencies=no
-   Before=netfilter-persistent.service nftables.service ufw.service firewalld.service
-   ConditionPathExists=/var/lib/ipshield/ipset.save
-
-   [Service]
-   Type=oneshot
-   ExecStart=/sbin/ipset restore -! -f /var/lib/ipshield/ipset.save
-   RemainAfterExit=yes
-
-   [Install]
-   WantedBy=sysinit.target
-   EOF
-   sudo systemctl enable ipshield-restore.service
-
-   # Sauvegarde initiale
-   sudo ipset save > /var/lib/ipshield/ipset.save
-   ```
-
-   Puis ajoute en fin de `update-blocklist.sh` (ou via cron séparé) :
-   ```bash
-   ipset save > /var/lib/ipshield/ipset.save
-   ```
-
-   Au reboot : `ipshield-restore` charge l'ipset depuis disque AVANT que le firewall démarre. Les règles `--match-set` matchent immédiatement. Pas de fenêtre vulnérable.
-
-3. **Acceptation du risque** : pour un serveur derrière un load balancer ou avec d'autres défenses (fail2ban, WAF), la fenêtre 60s peut être acceptable.
+Avec `iptables` direct, la persistance est optionnelle : les règles ne sont pas persistantes par défaut, donc le fallback est fail-open jusqu'au prochain cron. Avec `ufw` et `firewalld`, activez le service de restauration.
 
 #### Migration : ancien bug nftables (priorité de chaîne admin_access)
 
@@ -698,7 +644,7 @@ iptables -S INPUT | grep blacklist-allow
 
 ### Désinstallation
 
-`uninstall.sh` retire les règles ipshield (LOG/DROP blocklist + ACCEPT whitelist), détruit les ipsets associés, et restaure `/etc/ufw/before.rules.bak` si présent. Il **ne désinstalle pas** le firewall ni les paquets.
+`uninstall.sh` retire les règles ipshield (LOG/DROP blocklist + ACCEPT whitelist), détruit les ipsets associés, retire les règles ipshield/orphelines de `/etc/ufw/before.rules` ligne par ligne, et peut désactiver/supprimer `ipshield-restore.service`. Il **ne désinstalle pas** le firewall ni les paquets.
 
 ```bash
 # Mode dry-run (défaut) : affiche ce qui serait fait

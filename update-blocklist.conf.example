@@ -93,3 +93,12 @@ LOG_BURST=100
 # Empty = auto-detect via "ip route get 8.8.8.8".
 # Set explicitly if auto-detection picks the wrong interface (e.g. VPN).
 WAN_INTERFACE=""
+
+# --- ipset persistence ---
+# Saves the ipshield ipsets after each successful update so a systemd service
+# can restore them before ufw/firewalld/nftables starts at boot.
+# Strongly recommended when using a persistent firewall such as ufw or firewalld
+# with iptables-nft, because rules referencing a missing ipset can make firewall
+# reload/start fail.
+PERSIST_IPSET=1
+IPSET_SAVE_FILE="/var/lib/ipshield/ipset.save"

@@ -273,6 +273,82 @@ configure_conf() {
   log "  Configuration installed. Edit if needed (whitelist, custom sources, etc.)."
 }
 
+# --- ipset persistence service ---
+configure_ipset_restore() {
+  local conf_path="/etc/update-blocklist.conf"
+  local persist=1
+  local save_file="/var/lib/ipshield/ipset.save"
+
+  if [ -f "$conf_path" ]; then
+    # shellcheck source=/dev/null
+    . "$conf_path"
+    persist="${PERSIST_IPSET:-1}"
+    save_file="${IPSET_SAVE_FILE:-/var/lib/ipshield/ipset.save}"
+  fi
+
+  if ! [[ "$persist" =~ ^[01]$ ]]; then
+    err "invalid PERSIST_IPSET in $conf_path: $persist"
+    return 1
+  fi
+
+  if [ "$persist" != "1" ]; then
+    log "ipset persistence disabled by PERSIST_IPSET=0."
+    return 0
+  fi
+
+  if [[ "$save_file" != /* ]] || [[ "$save_file" =~ [[:space:]] ]]; then
+    err "invalid IPSET_SAVE_FILE in $conf_path: $save_file"
+    return 1
+  fi
+
+  local default_answer="yes"
+  [ "$FIREWALL" = "iptables" ] && default_answer="no"
+
+  echo ""
+  if ! ask_yes_no "Install/update the ipset restore systemd service?" "$default_answer"; then
+    log "ipset restore service not configured."
+    return 0
+  fi
+
+  if ! command -v ipset >/dev/null 2>&1; then
+    err "ipset command not available. Cannot configure restore service."
+    return 1
+  fi
+
+  local ipset_bin service_path unit_content save_dir
+  ipset_bin="$(command -v ipset)"
+  service_path="/etc/systemd/system/ipshield-restore.service"
+  save_dir="$(dirname "$save_file")"
+  mkdir -p "$save_dir"
+  chmod 700 "$save_dir"
+
+  unit_content="[Unit]
+Description=Restore ipshield ipsets before firewall start
+DefaultDependencies=no
+Before=netfilter-persistent.service nftables.service ufw.service firewalld.service
+ConditionPathExists=$save_file
+
+[Service]
+Type=oneshot
+ExecStart=$ipset_bin restore -! -f $save_file
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target"
+
+  if [ -f "$service_path" ] && [ "$(cat "$service_path")" = "$unit_content" ]; then
+    log "ipshield-restore.service already up-to-date."
+  else
+    printf '%s\n' "$unit_content" > "$service_path"
+    chmod 644 "$service_path"
+    log "Installed $service_path"
+  fi
+
+  systemctl daemon-reload
+  systemctl enable ipshield-restore.service
+  log "ipset restore service enabled. The save file will be written by update-blocklist.sh after a successful run."
+}
+
 # --- Logs configuration (rsyslog filter + logrotate) ---
 configure_logs() {
   echo ""
@@ -451,6 +527,7 @@ if [ "$FIREWALL" = "$DETECTED" ]; then
   echo ""
   log "$FIREWALL is already active on this system (no transition needed)."
   configure_conf
+  configure_ipset_restore
   configure_cron
   configure_logs
   exit 0
@@ -723,6 +800,7 @@ echo ""
 log "$FIREWALL installed and enabled successfully."
 
 configure_conf
+configure_ipset_restore
 configure_cron
 configure_logs
 

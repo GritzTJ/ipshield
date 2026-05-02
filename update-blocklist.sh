@@ -163,6 +163,20 @@ if [ -n "$WAN_INTERFACE" ] && [[ ! "$WAN_INTERFACE" =~ ^[a-zA-Z0-9._-]+$ ]]; the
   exit 1
 fi
 
+# --- ipset persistence validation ---
+: "${PERSIST_IPSET:=1}"
+: "${IPSET_SAVE_FILE:=/var/lib/ipshield/ipset.save}"
+if ! [[ "$PERSIST_IPSET" =~ ^[01]$ ]]; then
+  echo "Error: PERSIST_IPSET invalid ('$PERSIST_IPSET'). Expected 0 or 1." >&2
+  exit 1
+fi
+if [ "$PERSIST_IPSET" -eq 1 ]; then
+  if [[ "$IPSET_SAVE_FILE" != /* ]] || [[ "$IPSET_SAVE_FILE" =~ [[:space:]] ]]; then
+    echo "Error: IPSET_SAVE_FILE invalid ('$IPSET_SAVE_FILE'). Absolute path without whitespace expected." >&2
+    exit 1
+  fi
+fi
+
 # --- Derived variables ---
 IPSET_TYPE="hash:net"
 IPSET_FAMILY="inet"
@@ -244,13 +258,111 @@ detect_docker() {
 _remove_matching_rules() {
   local chain="$1"
   local pattern="$2"
-  local rule
+  local line rule_num n
   while true; do
-    rule="$(iptables -S "$chain" 2>/dev/null | grep -E "^-A $chain.*$pattern" | head -1 || true)"
-    [ -z "$rule" ] && break
-    rule="${rule/#-A /-D }"
-    eval "iptables $rule"
+    rule_num=""
+    n=0
+    while IFS= read -r line; do
+      [[ "$line" == "-A $chain "* ]] || continue
+      n=$((n + 1))
+      if printf '%s\n' "$line" | grep -qE -- "$pattern"; then
+        rule_num="$n"
+        break
+      fi
+    done < <(iptables -S "$chain" 2>/dev/null || true)
+    [ -z "$rule_num" ] && break
+    iptables -D "$chain" "$rule_num"
   done
+}
+
+# --- ufw before.rules hygiene ---
+_ufw_referenced_sets() {
+  [ -f /etc/ufw/before.rules ] || return 0
+  grep -oE -- "-A ufw-before-input -m set --match-set [^ ]+ src" /etc/ufw/before.rules 2>/dev/null \
+    | awk '{print $6}' \
+    | sort -u
+}
+
+_ipset_exists() {
+  local set="$1"
+  ipset list -n 2>/dev/null | awk -v s="$set" '$0==s{found=1} END{exit(found?0:1)}'
+}
+
+_create_empty_ipset_if_missing() {
+  local set="$1"
+  _ipset_exists "$set" && return 1
+  ipset create "$set" "$IPSET_TYPE" family "$IPSET_FAMILY" hashsize "$BASE_HASHSIZE" maxelem "$BASE_MAXELEM"
+  return 0
+}
+
+_ufw_preflight_ipsets() {
+  [ -f /etc/ufw/before.rules ] || return 0
+
+  local changed=0
+  local ref_set
+  local orphans=()
+
+  while IFS= read -r ref_set; do
+    [ -z "$ref_set" ] && continue
+    case "$ref_set" in
+      "$SET_NAME")
+        if _create_empty_ipset_if_missing "$SET_NAME"; then
+          log "ufw: created missing ipset $SET_NAME before firewall reload."
+          changed=1
+        fi
+        ;;
+      "$WHITELIST_SET_NAME")
+        if [ "${#WHITELIST[@]}" -gt 0 ]; then
+          if _create_empty_ipset_if_missing "$WHITELIST_SET_NAME"; then
+            log "ufw: created missing ipset $WHITELIST_SET_NAME before firewall reload."
+            changed=1
+          fi
+        else
+          orphans+=("$ref_set")
+        fi
+        ;;
+      *)
+        if ! _ipset_exists "$ref_set"; then
+          orphans+=("$ref_set")
+        fi
+        ;;
+    esac
+  done < <(_ufw_referenced_sets)
+
+  if [ "${#orphans[@]}" -gt 0 ]; then
+    cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
+    for ref_set in "${orphans[@]}"; do
+      sed -i "\\|^-A ufw-before-input -m set --match-set $ref_set src |d" /etc/ufw/before.rules
+    done
+    log "ufw: removed orphan rule(s) referencing nonexistent or inactive ipset(s): ${orphans[*]}"
+    changed=1
+  fi
+
+  if [ "$changed" -eq 1 ] && command -v ufw >/dev/null 2>&1; then
+    ufw reload
+  fi
+}
+
+_save_persistent_ipsets() {
+  [ "$PERSIST_IPSET" -eq 1 ] || return 0
+
+  local save_dir save_tmp
+  save_dir="$(dirname "$IPSET_SAVE_FILE")"
+  mkdir -p "$save_dir"
+  save_tmp="$(mktemp -p "$save_dir" ".ipset.save.XXXXXX")"
+
+  if _ipset_exists "$SET_NAME"; then
+    ipset save "$SET_NAME" > "$save_tmp"
+  else
+    : > "$save_tmp"
+  fi
+  if _ipset_exists "$WHITELIST_SET_NAME"; then
+    ipset save "$WHITELIST_SET_NAME" >> "$save_tmp"
+  fi
+
+  chmod 600 "$save_tmp"
+  mv "$save_tmp" "$IPSET_SAVE_FILE"
+  log "ipset persistence saved: $IPSET_SAVE_FILE"
 }
 
 # --- Idempotent insertion/update of LOG + DROP rules on an iptables chain ---
@@ -440,34 +552,7 @@ apply_firewall_rules() {
       ;;
 
     ufw)
-      # Cleanup orphan ipshield rules in ufw-before-input that reference an
-      # ipset which no longer exists (typical after WHITELIST_SET_NAME rename
-      # across versions, or after a partial uninstall). Without this, the
-      # next "ufw reload" would fail with "iptables-restore: Set <X> doesn't
-      # exist", leaving the firewall in a partial state -- the kernel may
-      # then lose its ESTABLISHED,RELATED ACCEPT and break outbound DNS.
-      # Idempotent: no-op when no orphan is found.
-      if [ -f /etc/ufw/before.rules ]; then
-        local orphans=()
-        local ref_set
-        while IFS= read -r ref_set; do
-          [ -z "$ref_set" ] && continue
-          [ "$ref_set" = "$SET_NAME" ] && continue
-          [ "$ref_set" = "$WHITELIST_SET_NAME" ] && continue
-          if ipset list -n 2>/dev/null | awk -v s="$ref_set" '$0==s{f=1} END{exit(f?0:1)}'; then
-            continue  # set exists -> probably user-managed, leave alone
-          fi
-          orphans+=("$ref_set")
-        done < <(grep -oE -- "-A ufw-before-input -m set --match-set [^ ]+ src" /etc/ufw/before.rules 2>/dev/null | awk '{print $6}' | sort -u)
-        if [ "${#orphans[@]}" -gt 0 ]; then
-          cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
-          for ref_set in "${orphans[@]}"; do
-            sed -i "\\|^-A ufw-before-input -m set --match-set $ref_set src |d" /etc/ufw/before.rules
-          done
-          log "ufw: removed orphan rule(s) referencing nonexistent ipset(s): ${orphans[*]}"
-          ufw reload
-        fi
-      fi
+      _ufw_preflight_ipsets
 
       if ! grep -q "match-set $SET_NAME src" /etc/ufw/before.rules 2>/dev/null; then
         # Backup before modification (protects against sed corruption)
@@ -538,6 +623,13 @@ log "--- Update on $(date '+%Y-%m-%d %H:%M:%S %Z') ---"
 
 exec 9>"$LOCK_FILE"
 flock -n 9 || { err "Error: another instance is already running."; exit 1; }
+
+# Repair ufw rules before network access. If ufw/iptables-nft failed during
+# boot because ipsets were missing, this can restore firewall state before curl
+# needs DNS responses.
+if [ "$DRY_RUN" -eq 0 ] && [ -f /etc/ufw/before.rules ]; then
+  _ufw_preflight_ipsets
+fi
 
 # --- HTTP source warning ---
 for url in "${URLS[@]}"; do
@@ -845,3 +937,5 @@ if [ "${#WHITELIST[@]}" -eq 0 ] && [ "$WL_SET_EXISTS" -eq 1 ]; then
     err "Warning: cannot destroy $WHITELIST_SET_NAME (still referenced?)."
   fi
 fi
+
+_save_persistent_ipsets

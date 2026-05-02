@@ -27,6 +27,7 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 - **Docker-aware**: inbound-only protection of the `DOCKER-USER` chain, scoped to the WAN interface (container egress is never filtered)
 - **Whitelist** of trusted IPs/subnets (management, jump hosts) with prefix-width safeguard against accidental `0.0.0.0/0`
 - **Zero-downtime updates** via atomic ipset swap
+- **Boot-safe ipset persistence** for persistent firewalls (`ufw`, `firewalld`, `nftables`)
 - **Guided setup**: `setup-firewall.sh` installs the firewall, configures the cron, drops the rsyslog filter and logrotate configs
 - **Clean uninstall** with dry-run preview and confirmation
 - **Single configuration file** (`/etc/update-blocklist.conf`) drives everything; no defaults hard-coded in scripts
@@ -135,6 +136,7 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 - **Compatible Docker** : protection de la chaîne `DOCKER-USER` en entrée uniquement, scopée à l'interface WAN (l'egress des conteneurs n'est jamais filtré)
 - **Whitelist** d'IP/subnets de confiance (management, bastions) avec garde-fou de préfixe pour empêcher un `0.0.0.0/0` accidentel
 - **Mise à jour sans interruption** par swap atomique d'ipset
+- **Persistance ipset au boot** pour les firewalls persistants (`ufw`, `firewalld`, `nftables`)
 - **Installation guidée** : `setup-firewall.sh` installe le firewall, configure le cron, dépose le filtre rsyslog et les configs logrotate
 - **Désinstallation propre** avec mode dry-run et confirmation
 - **Fichier de configuration unique** (`/etc/update-blocklist.conf`) qui pilote l'ensemble ; aucun défaut codé en dur dans les scripts

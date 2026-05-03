@@ -228,6 +228,8 @@ On a Docker host, traffic destined for containers (ports published via `-p` / `p
 
 The script automatically detects Docker via the `DOCKER-USER` chain in iptables. When present, the same LOG + DROP rules are applied on `DOCKER-USER` in addition to `INPUT`, **scoped to the WAN interface** (`-i $WAN_INTERFACE`) to filter only **inbound** traffic from the Internet to containers. Outbound traffic from containers (which goes via `IN=br-xxx`) is never filtered, in line with the "filter inbound only" principle.
 
+Blocklist rules are also scoped to `conntrack --ctstate NEW`. For TCP, this means normal inbound connections are blocked at connection start (the SYN path), while replies to outbound connections already tracked as `ESTABLISHED` are not dropped just because the remote IP appears in a public blocklist.
+
 **WAN interface auto-detection**: by default, the script detects the interface via `ip route get 8.8.8.8`. If auto-detection picks the wrong interface (VPN/multi-homed), set `WAN_INTERFACE="ens160"` in `/etc/update-blocklist.conf`.
 
 **Bogon filter (RFC 6890)**: the script automatically rejects any IP/CIDR in reserved ranges (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, multicast, etc.). Prevents a public-source false positive from blocking the LAN or Docker bridge (real-world case: FireHOL Level 1 includes bogons by design).
@@ -244,7 +246,7 @@ Verification after a run:
 iptables -L DOCKER-USER -n -v
 ```
 
-LOG + DROP rules with `match-set blacklist src` and `in ens160` (or your detected WAN interface) should appear.
+LOG + DROP rules with `ctstate NEW`, `match-set blacklist src` and `in ens160` (or your detected WAN interface) should appear.
 
 ### Cron automation
 
@@ -385,8 +387,8 @@ If you prefer to configure the rules manually instead of using `update-blocklist
 #### iptables
 
 ```bash
-iptables -I INPUT -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
-iptables -I INPUT 2 -m set --match-set blacklist src -j DROP
+iptables -I INPUT -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+iptables -I INPUT 2 -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
 ```
 
 Persistence:
@@ -406,15 +408,15 @@ service iptables save
 nftables cannot reference ipset sets natively (the `@set` syntax only applies to native nft sets). On nftables systems, `iptables` is provided by `iptables-nft`, which translates the commands into nft rules internally while supporting ipset matching via the kernel `xt_set` module:
 
 ```bash
-iptables -I INPUT -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
-iptables -I INPUT 2 -m set --match-set blacklist src -j DROP
+iptables -I INPUT -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+iptables -I INPUT 2 -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
 ```
 
 #### firewalld
 
 ```bash
-firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
-firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -m set --match-set blacklist src -j DROP
+firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
 firewall-cmd --reload
 ```
 
@@ -423,8 +425,8 @@ firewall-cmd --reload
 Add to `/etc/ufw/before.rules` (in the `*filter` section, before `COMMIT`):
 
 ```
--A ufw-before-input -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
--A ufw-before-input -m set --match-set blacklist src -j DROP
+-A ufw-before-input -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+-A ufw-before-input -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
 ```
 
 Then `ufw reload`.
@@ -434,8 +436,8 @@ Then `ufw reload`.
 On a Docker host, add the same rules to the `DOCKER-USER` chain to protect the containers. Important: scope to the WAN interface (e.g. `ens160`) to filter inbound only and let container egress through:
 
 ```bash
-iptables -I DOCKER-USER -i ens160 -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
-iptables -I DOCKER-USER 2 -i ens160 -m set --match-set blacklist src -j DROP
+iptables -I DOCKER-USER -i ens160 -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+iptables -I DOCKER-USER 2 -i ens160 -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
 ```
 
 > `update-blocklist.sh` does this automatically when Docker is detected, with WAN interface auto-detection. Manual configuration is only required if you do not use the script.
@@ -666,6 +668,8 @@ Sur un hôte Docker, le trafic destiné aux conteneurs (ports publiés via `-p` 
 
 Le script détecte automatiquement la présence de Docker via la chaîne `DOCKER-USER` dans iptables. Quand elle existe, les mêmes règles LOG + DROP sont appliquées sur `DOCKER-USER` en plus de `INPUT`, **scopées à l'interface WAN** (`-i $WAN_INTERFACE`) pour ne filtrer que le trafic **entrant** depuis Internet vers les conteneurs. Le trafic sortant des conteneurs (qui passe par `IN=br-xxx`) n'est jamais filtré, conformément au principe "filtrer uniquement l'entrée".
 
+Les règles blocklist sont aussi limitées à `conntrack --ctstate NEW`. Pour TCP, cela bloque les connexions entrantes normales au démarrage de la connexion (chemin SYN), tandis que les réponses à des connexions sortantes déjà suivies comme `ESTABLISHED` ne sont pas supprimées seulement parce que l'IP distante figure dans une liste publique.
+
 **Auto-détection de l'interface WAN** : par défaut, le script détecte l'interface via `ip route get 8.8.8.8`. Si l'auto-détection donne le mauvais résultat (cas VPN/multi-homed), définir `WAN_INTERFACE="ens160"` dans `/etc/update-blocklist.conf`.
 
 **Filtrage des bogons (RFC 6890)** : le script rejette automatiquement toute IP/CIDR dans les plages réservées (10/8, 172.16/12, 192.168/16, 127/8, 169.254/16, multicast, etc.). Empêche un faux positif d'une source publique de bloquer le LAN ou le bridge Docker (cas réel : FireHOL Level 1 inclut les bogons par design).
@@ -682,7 +686,7 @@ Vérification après exécution :
 iptables -L DOCKER-USER -n -v
 ```
 
-Les règles LOG + DROP avec `match-set blacklist src` et `in ens160` (ou l'interface WAN détectée) doivent apparaître.
+Les règles LOG + DROP avec `ctstate NEW`, `match-set blacklist src` et `in ens160` (ou l'interface WAN détectée) doivent apparaître.
 
 ### Automatisation (cron)
 
@@ -823,8 +827,8 @@ Si vous préférez configurer les règles manuellement au lieu d'utiliser `updat
 #### iptables
 
 ```bash
-iptables -I INPUT -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
-iptables -I INPUT 2 -m set --match-set blacklist src -j DROP
+iptables -I INPUT -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+iptables -I INPUT 2 -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
 ```
 
 Persistance :
@@ -844,15 +848,15 @@ service iptables save
 nftables ne peut pas référencer les sets ipset nativement (la syntaxe `@set` ne concerne que les sets nft natifs). Sur les systèmes nftables, `iptables` est fourni par `iptables-nft` et traduit les commandes en règles nft internes tout en supportant le match ipset via le module `xt_set` du noyau :
 
 ```bash
-iptables -I INPUT -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
-iptables -I INPUT 2 -m set --match-set blacklist src -j DROP
+iptables -I INPUT -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+iptables -I INPUT 2 -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
 ```
 
 #### firewalld
 
 ```bash
-firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
-firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -m set --match-set blacklist src -j DROP
+firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
 firewall-cmd --reload
 ```
 
@@ -861,8 +865,8 @@ firewall-cmd --reload
 Ajouter dans `/etc/ufw/before.rules` (section `*filter`, avant `COMMIT`) :
 
 ```
--A ufw-before-input -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
--A ufw-before-input -m set --match-set blacklist src -j DROP
+-A ufw-before-input -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+-A ufw-before-input -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
 ```
 
 Puis `ufw reload`.
@@ -872,8 +876,8 @@ Puis `ufw reload`.
 Sur un hôte Docker, ajouter les mêmes règles sur la chaîne `DOCKER-USER` pour protéger les conteneurs. Important : scoper à l'interface WAN (ex `ens160`) pour ne filtrer que l'entrée et laisser passer l'egress des conteneurs :
 
 ```bash
-iptables -I DOCKER-USER -i ens160 -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
-iptables -I DOCKER-USER 2 -i ens160 -m set --match-set blacklist src -j DROP
+iptables -I DOCKER-USER -i ens160 -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+iptables -I DOCKER-USER 2 -i ens160 -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
 ```
 
 > `update-blocklist.sh` fait cela automatiquement quand Docker est détecté, avec auto-détection de l'interface WAN. La configuration manuelle n'est nécessaire que si vous n'utilisez pas le script.

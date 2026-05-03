@@ -156,7 +156,7 @@ fi
 # --- Auto-detect WAN interface if not defined ---
 # Used to scope the DOCKER-USER rule to inbound traffic only.
 if [ -z "$WAN_INTERFACE" ]; then
-  WAN_INTERFACE="$(ip -4 route get 8.8.8.8 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}')"
+  WAN_INTERFACE="$(ip -4 route get 8.8.8.8 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}' || true)"
 fi
 if [ -n "$WAN_INTERFACE" ] && [[ ! "$WAN_INTERFACE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
   echo "Error: WAN_INTERFACE invalid ('$WAN_INTERFACE')." >&2
@@ -301,6 +301,7 @@ _ufw_preflight_ipsets() {
   local changed=0
   local ref_set
   local orphans=()
+  local snapshot=""
 
   while IFS= read -r ref_set; do
     [ -z "$ref_set" ] && continue
@@ -331,6 +332,8 @@ _ufw_preflight_ipsets() {
 
   if [ "${#orphans[@]}" -gt 0 ]; then
     cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
+    snapshot="${TMP_DIR}/ufw-before.rules.preflight"
+    cp /etc/ufw/before.rules "$snapshot"
     for ref_set in "${orphans[@]}"; do
       sed -i "\\|^-A ufw-before-input -m set --match-set $ref_set src |d" /etc/ufw/before.rules
     done
@@ -339,7 +342,13 @@ _ufw_preflight_ipsets() {
   fi
 
   if [ "$changed" -eq 1 ] && command -v ufw >/dev/null 2>&1; then
-    ufw reload
+    if ! ufw reload; then
+      if [ -n "$snapshot" ] && [ -f "$snapshot" ]; then
+        cp "$snapshot" /etc/ufw/before.rules
+        err "ufw: reload failed after preflight; restored /etc/ufw/before.rules snapshot."
+      fi
+      return 1
+    fi
   fi
 }
 

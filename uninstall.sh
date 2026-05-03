@@ -24,6 +24,8 @@ This script:
   - removes ipshield rules (LOG + DROP blocklist, ACCEPT whitelist) on INPUT
     and DOCKER-USER (if Docker is present);
   - destroys ipsets $SET_NAME and $WHITELIST_SET_NAME;
+  - optionally removes the configuration and ipset persistence file;
+  - optionally removes ipshield log files, including rotated/compressed ones;
   - removes ipshield/orphan rules from /etc/ufw/before.rules line by line (ufw);
   - optionally removes ipshield-restore.service;
   - reports (without modifying) cron lines referencing update-blocklist.sh.
@@ -83,6 +85,8 @@ if [[ ! "$WHITELIST_SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
   echo "Error: WHITELIST_SET_NAME invalid ('$WHITELIST_SET_NAME')." >&2
   exit 1
 fi
+: "${PERSIST_IPSET:=1}"
+: "${IPSET_SAVE_FILE:=/var/lib/ipshield/ipset.save}"
 
 # --- Lock shared with update-blocklist.sh (anti-race against cron) ---
 # Without this lock, an update-blocklist.sh cron run could re-create the rules
@@ -290,6 +294,42 @@ elif [ "$APPLY" -eq 1 ]; then
 fi
 
 echo ""
+log "${PREFIX}--- log files ---"
+log_files=()
+for pattern in /var/log/update-blocklist.log* /var/log/blocked-ips.log*; do
+  for f in $pattern; do
+    [ -e "$f" ] && log_files+=("$f")
+  done
+done
+if [ "${#log_files[@]}" -gt 0 ]; then
+  for f in "${log_files[@]}"; do
+    echo "  $f"
+  done
+  [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to remove them."
+else
+  echo "  (none)"
+fi
+echo "  Note: journald/kernel entries are not purged; journal vacuuming is global."
+
+echo ""
+log "${PREFIX}--- configuration + persistence files ---"
+data_files=()
+if [ -f "$CONF_FILE" ]; then
+  data_files+=("$CONF_FILE")
+fi
+if [ -n "${IPSET_SAVE_FILE:-}" ] && [ -f "$IPSET_SAVE_FILE" ]; then
+  data_files+=("$IPSET_SAVE_FILE")
+fi
+if [ "${#data_files[@]}" -gt 0 ]; then
+  for f in "${data_files[@]}"; do
+    echo "  $f"
+  done
+  [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to remove them."
+else
+  echo "  (none)"
+fi
+
+echo ""
 log "${PREFIX}--- systemd restore service ---"
 restore_service="/etc/systemd/system/ipshield-restore.service"
 if [ -f "$restore_service" ]; then
@@ -448,6 +488,26 @@ if [ -n "$other_cron" ]; then
   echo "$other_cron" | awk '{print "    " $0}'
 fi
 
+# --- Optional config + persistence file removal ---
+if [ "${#data_files[@]}" -gt 0 ]; then
+  echo ""
+  log "ipshield configuration + persistence files found:"
+  for f in "${data_files[@]}"; do
+    echo "    $f"
+  done
+  if ask_yes_no "Remove them?" yes; then
+    for f in "${data_files[@]}"; do
+      if rm -f "$f" 2>/dev/null; then
+        log "  $f removed."
+      else
+        err "  Cannot remove $f."
+      fi
+    done
+  else
+    log "Configuration + persistence files kept."
+  fi
+fi
+
 # --- Optional rsyslog + logrotate config removal ---
 log_configs=(/etc/rsyslog.d/30-blocked-ips.conf /etc/logrotate.d/update-blocklist /etc/logrotate.d/blocked-ips)
 present_log_configs=()
@@ -480,6 +540,27 @@ if [ "${#present_log_configs[@]}" -gt 0 ]; then
     log "Note: log files /var/log/update-blocklist.log and /var/log/blocked-ips.log are kept."
   else
     log "Configs kept."
+  fi
+fi
+
+# --- Optional log file removal ---
+if [ "${#log_files[@]}" -gt 0 ]; then
+  echo ""
+  log "ipshield log files found:"
+  for f in "${log_files[@]}"; do
+    echo "    $f"
+  done
+  log "Journald/kernel entries are not purged; journal vacuuming is global."
+  if ask_yes_no "Remove ipshield log files?" yes; then
+    for f in "${log_files[@]}"; do
+      if rm -f "$f" 2>/dev/null; then
+        log "  $f removed."
+      else
+        err "  Cannot remove $f."
+      fi
+    done
+  else
+    log "Log files kept."
   fi
 fi
 

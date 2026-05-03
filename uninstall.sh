@@ -165,11 +165,7 @@ remove_iptables_rules() {
   while iptables -C "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; do
     iptables -D "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
   done
-  # Blacklist DROP
-  while iptables -C "$chain" -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; do
-    iptables -D "$chain" -m set --match-set "$SET_NAME" src -j DROP
-  done
-  # Blacklist LOG: generic removal (any limit values)
+  # Blacklist LOG/DROP: generic removal (any limit/conntrack values)
   local line rule_num n
   while true; do
     rule_num=""
@@ -177,7 +173,7 @@ remove_iptables_rules() {
     while IFS= read -r line; do
       [[ "$line" == "-A $chain "* ]] || continue
       n=$((n + 1))
-      if printf '%s\n' "$line" | grep -qE -- "--match-set $SET_NAME src.*-j LOG --log-prefix \"BLOCKED: \""; then
+      if printf '%s\n' "$line" | grep -qE -- "--match-set $SET_NAME src.*-j (LOG|DROP)"; then
         rule_num="$n"
         break
       fi

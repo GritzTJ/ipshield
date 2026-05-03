@@ -275,6 +275,20 @@ _remove_matching_rules() {
   done
 }
 
+_remove_firewalld_block_rules() {
+  local chain="$1"
+  local line
+  local rule_args
+  while true; do
+    line="$(firewall-cmd --permanent --direct --get-all-rules 2>/dev/null \
+      | grep -E "^ipv4 filter $chain .*--match-set $SET_NAME src.*-j (LOG|DROP)" \
+      | head -1 || true)"
+    [ -z "$line" ] && break
+    read -r -a rule_args <<< "$line"
+    firewall-cmd --permanent --direct --remove-rule "${rule_args[@]}"
+  done
+}
+
 # --- ufw before.rules hygiene ---
 _ufw_referenced_sets() {
   [ -f /etc/ufw/before.rules ] || return 0
@@ -378,7 +392,8 @@ _save_persistent_ipsets() {
 # $1: chain (INPUT, DOCKER-USER, ...)
 # $2: optional interface (empty = no constraint). Used for DOCKER-USER to
 #     filter only INBOUND traffic from the Internet (not container egress).
-# Detects drift on LOG_LIMIT/LOG_BURST and on the presence/absence of -i.
+# Detects drift on LOG_LIMIT/LOG_BURST, conntrack state and on the
+# presence/absence of -i.
 _apply_iptables_rules() {
   local chain="$1"
   local iface="${2:-}"
@@ -387,13 +402,15 @@ _apply_iptables_rules() {
   local iface_args=()
   [ -n "$iface" ] && iface_args=( -i "$iface" )
 
-  local log_args=( "${iface_args[@]}" -m set --match-set "$SET_NAME" src )
+  local state_args=( -m conntrack --ctstate NEW )
+
+  local log_args=( "${iface_args[@]}" "${state_args[@]}" -m set --match-set "$SET_NAME" src )
   if [ -n "$LOG_LIMIT" ]; then
     log_args+=( -m limit --limit "$LOG_LIMIT" --limit-burst "$LOG_BURST" )
   fi
   log_args+=( -j LOG --log-prefix "BLOCKED: " --log-level 4 )
 
-  local drop_args=( "${iface_args[@]}" -m set --match-set "$SET_NAME" src -j DROP )
+  local drop_args=( "${iface_args[@]}" "${state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP )
 
   # LOG: if the exact rule (current values + iface) does not exist,
   # remove any existing ipshield LOG rule (generic pattern) then insert.
@@ -489,9 +506,9 @@ apply_firewall_rules() {
   local docker_protected=0
 
   # Warn if WAN interface could not be detected: DOCKER-USER will be filtered
-  # without -i (legacy behaviour). The bogon filter prevents the LAN/Docker
-  # from being falsely blocked, but container egress to a real public
-  # blacklisted IP would still be dropped.
+  # without -i (legacy behaviour). Rules are still limited to ctstate NEW and
+  # source-IP matching; the bogon filter prevents LAN/Docker source ranges from
+  # being falsely blocked.
   if [ -z "$WAN_INTERFACE" ] && detect_docker; then
     err "Warning: WAN_INTERFACE not detected. The DOCKER-USER rule will filter"
     err "  in both directions. Set WAN_INTERFACE in $CONF_FILE to scope it."
@@ -526,15 +543,17 @@ apply_firewall_rules() {
     firewalld)
       local need_reload=0
       # Build LOG args according to LOG_LIMIT
-      local fw_log_args=( -m set --match-set "$SET_NAME" src )
+      local fw_state_args=( -m conntrack --ctstate NEW )
+      local fw_log_args=( "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src )
       if [ -n "$LOG_LIMIT" ]; then
         fw_log_args+=( -m limit --limit "$LOG_LIMIT" --limit-burst "$LOG_BURST" )
       fi
       fw_log_args+=( -j LOG --log-prefix "BLOCKED: " --log-level 4 )
 
-      if ! firewall-cmd --permanent --direct --query-rule ipv4 filter INPUT 1 -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
+      if ! firewall-cmd --permanent --direct --query-rule ipv4 filter INPUT 1 "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
+        _remove_firewalld_block_rules INPUT
         firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 "${fw_log_args[@]}"
-        firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -m set --match-set "$SET_NAME" src -j DROP
+        firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP
         need_reload=1
         log "firewalld rules added (LOG + DROP)."
       fi
@@ -543,14 +562,16 @@ apply_firewall_rules() {
         # DOCKER-USER: add -i WAN_INTERFACE if defined (inbound filter only)
         local docker_iface_args=()
         [ -n "$WAN_INTERFACE" ] && docker_iface_args=( -i "$WAN_INTERFACE" )
-        local docker_log_args=( "${docker_iface_args[@]}" -m set --match-set "$SET_NAME" src )
+        local docker_state_args=( -m conntrack --ctstate NEW )
+        local docker_log_args=( "${docker_iface_args[@]}" "${docker_state_args[@]}" -m set --match-set "$SET_NAME" src )
         if [ -n "$LOG_LIMIT" ]; then
           docker_log_args+=( -m limit --limit "$LOG_LIMIT" --limit-burst "$LOG_BURST" )
         fi
         docker_log_args+=( -j LOG --log-prefix "BLOCKED: " --log-level 4 )
-        if ! firewall-cmd --permanent --direct --query-rule ipv4 filter DOCKER-USER 1 "${docker_iface_args[@]}" -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
+        if ! firewall-cmd --permanent --direct --query-rule ipv4 filter DOCKER-USER 1 "${docker_iface_args[@]}" "${docker_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
+          _remove_firewalld_block_rules DOCKER-USER
           firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 0 "${docker_log_args[@]}"
-          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 1 "${docker_iface_args[@]}" -m set --match-set "$SET_NAME" src -j DROP
+          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 1 "${docker_iface_args[@]}" "${docker_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP
           need_reload=1
           log "firewalld DOCKER-USER rules added (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
         fi
@@ -563,20 +584,22 @@ apply_firewall_rules() {
     ufw)
       _ufw_preflight_ipsets
 
-      if ! grep -q "match-set $SET_NAME src" /etc/ufw/before.rules 2>/dev/null; then
+      local ufw_drop_line="-A ufw-before-input -m conntrack --ctstate NEW -m set --match-set $SET_NAME src -j DROP"
+      if ! grep -qF "$ufw_drop_line" /etc/ufw/before.rules 2>/dev/null; then
         # Backup before modification (protects against sed corruption)
         cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
+        sed -i "\\|^-A ufw-before-input .*--match-set $SET_NAME src.*-j LOG|d;\\|^-A ufw-before-input .*--match-set $SET_NAME src.*-j DROP|d" /etc/ufw/before.rules
         # Build the LOG line according to LOG_LIMIT
         local ufw_log_line
         if [ -n "$LOG_LIMIT" ]; then
-          ufw_log_line="-A ufw-before-input -m set --match-set $SET_NAME src -m limit --limit $LOG_LIMIT --limit-burst $LOG_BURST -j LOG --log-prefix \"BLOCKED: \" --log-level 4"
+          ufw_log_line="-A ufw-before-input -m conntrack --ctstate NEW -m set --match-set $SET_NAME src -m limit --limit $LOG_LIMIT --limit-burst $LOG_BURST -j LOG --log-prefix \"BLOCKED: \" --log-level 4"
         else
-          ufw_log_line="-A ufw-before-input -m set --match-set $SET_NAME src -j LOG --log-prefix \"BLOCKED: \" --log-level 4"
+          ufw_log_line="-A ufw-before-input -m conntrack --ctstate NEW -m set --match-set $SET_NAME src -j LOG --log-prefix \"BLOCKED: \" --log-level 4"
         fi
         sed -i "/*filter/,/COMMIT/ {
           /COMMIT/ i\\
 $ufw_log_line\\
--A ufw-before-input -m set --match-set $SET_NAME src -j DROP
+$ufw_drop_line
         }" /etc/ufw/before.rules
         ufw reload
         log "ufw rules added (LOG + DROP)."

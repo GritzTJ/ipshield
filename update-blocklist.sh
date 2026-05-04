@@ -682,7 +682,7 @@ ok=0
 declare -a DL_PIDS=()
 
 for i in "${!URLS[@]}"; do
-  curl "${CURL_OPTS[@]}" "${URLS[$i]}" -o "${TMP_DIR}/dl.${i}" &
+  curl "${CURL_OPTS[@]}" "${URLS[$i]}" -o "${TMP_DIR}/dl.${i}" 2>"${TMP_DIR}/curl.${i}.err" &
   DL_PIDS+=("$!")
 done
 
@@ -693,8 +693,13 @@ for i in "${!URLS[@]}"; do
     DL_OK+=("$i")
     log "Download OK: ${URLS[$i]}"
   else
+    curl_reason="$(awk 'NF { line=$0 } END { print line }' "${TMP_DIR}/curl.${i}.err" 2>/dev/null || true)"
     fail=$((fail+1))
-    err "ERROR: download failed: ${URLS[$i]}"
+    if [ -n "$curl_reason" ]; then
+      err "ERROR: download failed: ${URLS[$i]} ($curl_reason)"
+    else
+      err "ERROR: download failed: ${URLS[$i]}"
+    fi
   fi
 done
 

@@ -385,6 +385,12 @@ _save_persistent_ipsets() {
 
   chmod 600 "$save_tmp"
   mv "$save_tmp" "$IPSET_SAVE_FILE"
+  # Fedora/RHEL run ipset under the iptables_t SELinux domain from systemd.
+  # A generic var_lib_t save file is not readable there, so label the file when
+  # the policy type exists. Ubuntu/Debian without SELinux simply skip this.
+  if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled && command -v chcon >/dev/null 2>&1; then
+    chcon -t iptables_var_lib_t "$IPSET_SAVE_FILE" 2>/dev/null || true
+  fi
   log "ipset persistence saved: $IPSET_SAVE_FILE"
 }
 

@@ -743,9 +743,9 @@ case "$FIREWALL" in
     systemctl start firewalld
     if [ -n "$SAFE_PORTS" ]; then
       for p in $SAFE_PORTS; do
-        firewall-cmd --permanent --add-port="$p"/tcp
+        firewall-cmd --permanent --add-port="$p"/tcp >/dev/null
       done
-      firewall-cmd --reload
+      firewall-cmd --reload >/dev/null
       log "Ports opened (firewalld): $SAFE_PORTS"
     fi
     ;;

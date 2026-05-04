@@ -285,7 +285,7 @@ _remove_firewalld_block_rules() {
       | head -1 || true)"
     [ -z "$line" ] && break
     read -r -a rule_args <<< "$line"
-    firewall-cmd --permanent --direct --remove-rule "${rule_args[@]}"
+    firewall-cmd --permanent --direct --remove-rule "${rule_args[@]}" >/dev/null
   done
 }
 
@@ -492,13 +492,13 @@ _whitelist_or_cleanup_firewalld() {
   local iface_args=()
   [ -n "$iface" ] && iface_args=( -i "$iface" )
   if [ "${#WHITELIST[@]}" -gt 0 ]; then
-    if ! firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; then
-      firewall-cmd --permanent --direct --add-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
+    if ! firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT >/dev/null 2>/dev/null; then
+      firewall-cmd --permanent --direct --add-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT >/dev/null
       return 0
     fi
   else
-    if firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; then
-      firewall-cmd --permanent --direct --remove-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
+    if firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT >/dev/null 2>/dev/null; then
+      firewall-cmd --permanent --direct --remove-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT >/dev/null
       return 0
     fi
   fi
@@ -556,10 +556,10 @@ apply_firewall_rules() {
       fi
       fw_log_args+=( -j LOG --log-prefix "BLOCKED: " --log-level 4 )
 
-      if ! firewall-cmd --permanent --direct --query-rule ipv4 filter INPUT 1 "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
+      if ! firewall-cmd --permanent --direct --query-rule ipv4 filter INPUT 1 "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP >/dev/null 2>/dev/null; then
         _remove_firewalld_block_rules INPUT
-        firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 "${fw_log_args[@]}"
-        firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP
+        firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 "${fw_log_args[@]}" >/dev/null
+        firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP >/dev/null
         need_reload=1
         log "firewalld rules added (LOG + DROP)."
       fi
@@ -574,17 +574,17 @@ apply_firewall_rules() {
           docker_log_args+=( -m limit --limit "$LOG_LIMIT" --limit-burst "$LOG_BURST" )
         fi
         docker_log_args+=( -j LOG --log-prefix "BLOCKED: " --log-level 4 )
-        if ! firewall-cmd --permanent --direct --query-rule ipv4 filter DOCKER-USER 1 "${docker_iface_args[@]}" "${docker_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP 2>/dev/null; then
+        if ! firewall-cmd --permanent --direct --query-rule ipv4 filter DOCKER-USER 1 "${docker_iface_args[@]}" "${docker_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP >/dev/null 2>/dev/null; then
           _remove_firewalld_block_rules DOCKER-USER
-          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 0 "${docker_log_args[@]}"
-          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 1 "${docker_iface_args[@]}" "${docker_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP
+          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 0 "${docker_log_args[@]}" >/dev/null
+          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 1 "${docker_iface_args[@]}" "${docker_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP >/dev/null
           need_reload=1
           log "firewalld DOCKER-USER rules added (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
         fi
         _whitelist_or_cleanup_firewalld DOCKER-USER "$WAN_INTERFACE" && need_reload=1
         docker_protected=1
       fi
-      [ "$need_reload" -eq 1 ] && firewall-cmd --reload
+      [ "$need_reload" -eq 1 ] && firewall-cmd --reload >/dev/null
       ;;
 
     ufw)

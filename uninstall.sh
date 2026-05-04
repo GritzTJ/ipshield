@@ -199,7 +199,7 @@ remove_firewalld_rules() {
       | head -1 || true)"
     [ -z "$line" ] && break
     read -r -a rule_args <<< "$line"
-    firewall-cmd --permanent --direct --remove-rule "${rule_args[@]}"
+    firewall-cmd --permanent --direct --remove-rule "${rule_args[@]}" >/dev/null
     changed=1
   done
   [ "$changed" -eq 1 ] && return 0 || return 1
@@ -385,7 +385,7 @@ case "$FW" in
     if [ "$DOCKER_PRESENT" -eq 1 ] && remove_firewalld_rules DOCKER-USER; then
       need_reload=1
     fi
-    [ "$need_reload" -eq 1 ] && firewall-cmd --reload
+    [ "$need_reload" -eq 1 ] && firewall-cmd --reload >/dev/null
     ;;
   ufw)
     # Remove ipshield rules from before.rules line-by-line (more robust than

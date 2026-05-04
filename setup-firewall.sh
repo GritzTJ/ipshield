@@ -530,6 +530,8 @@ if [ "$FIREWALL" = "$DETECTED" ]; then
   configure_ipset_restore
   configure_cron
   configure_logs
+  echo ""
+  log "Now run update-blocklist.sh for the first update; the cron will take over afterwards."
   exit 0
 fi
 

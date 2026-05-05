@@ -493,13 +493,19 @@ fi
 echo ""
 log "Choose the firewall to install and enable:"
 echo ""
+log "Recommendation:"
+log "  - Ubuntu/Debian production server: nftables"
+log "  - Fedora/RHEL-family production server: firewalld"
+log "  - Legacy/minimal systems: iptables"
+log "  - UFW users: supported, but nftables is preferred for new production installs"
+echo ""
 
 options=("iptables" "nftables" "firewalld" "ufw")
 descriptions=(
-  "classic, universally compatible, simple"
-  "iptables successor, performant, unified syntax"
-  "zone-based management, dynamic reload, common on Fedora/RHEL"
-  "user-friendly, common on Ubuntu"
+  "legacy fallback, broad compatibility for old/minimal systems"
+  "recommended for Ubuntu/Debian production servers"
+  "recommended for Fedora/RHEL-family production servers"
+  "Ubuntu-friendly frontend; supported, nftables preferred for production"
 )
 
 for i in "${!options[@]}"; do

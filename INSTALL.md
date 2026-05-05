@@ -373,12 +373,12 @@ EOF
 
 ### Supported firewalls
 
-| Firewall | Description |
+| Firewall | Recommendation |
 |---|---|
-| **iptables** | Classic, universally compatible, simple |
-| **nftables** | iptables successor, performant, unified syntax |
-| **firewalld** | Zone-based management, dynamic reload, common on Fedora/RHEL |
-| **ufw** | User-friendly, common on Ubuntu |
+| **iptables** | Legacy fallback for old/minimal systems |
+| **nftables** | Recommended for Ubuntu/Debian production servers |
+| **firewalld** | Recommended for Fedora/RHEL-family production servers |
+| **ufw** | Ubuntu-friendly frontend; supported, but `nftables` is preferred for new production installs |
 
 ### Manual firewall configuration (alternative)
 
@@ -813,12 +813,12 @@ EOF
 
 ### Firewalls supportés
 
-| Firewall | Description |
+| Firewall | Recommandation |
 |---|---|
-| **iptables** | Classique, compatible partout, simple |
-| **nftables** | Successeur d'iptables, performant, syntaxe unifiée |
-| **firewalld** | Gestion par zones, rechargement dynamique, courant sur Fedora/RHEL |
-| **ufw** | Simple d'utilisation, courant sur Ubuntu |
+| **iptables** | Fallback legacy pour systèmes anciens/minimaux |
+| **nftables** | Recommandé pour les serveurs Ubuntu/Debian en production |
+| **firewalld** | Recommandé pour les serveurs Fedora/RHEL et dérivés |
+| **ufw** | Frontend Ubuntu pratique ; supporté, mais `nftables` est préféré pour les nouvelles installations en production |
 
 ### Configuration manuelle du firewall (alternative)
 

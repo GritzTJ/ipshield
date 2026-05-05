@@ -682,35 +682,35 @@ log "Installing $FIREWALL package..."
 if [ "$PKG_MANAGER" = "apt" ]; then
   apt update -qq
 fi
-# `ipset` is installed alongside the firewall (dependency of update-blocklist.sh,
-# often missing on minimal Debian, would otherwise cause "missing command: ipset").
+# `ipset` and `curl` are installed alongside the firewall (dependencies of
+# update-blocklist.sh, often missing on minimal Debian).
 case "$FIREWALL" in
   iptables)
     if [ "$PKG_MANAGER" = "apt" ]; then
-      apt install -y iptables ipset
+      apt install -y iptables ipset curl
     else
-      dnf install -y iptables ipset
+      dnf install -y iptables ipset curl
     fi
     ;;
   nftables)
     if [ "$PKG_MANAGER" = "apt" ]; then
-      apt install -y nftables ipset
+      apt install -y nftables ipset curl
     else
-      dnf install -y nftables ipset
+      dnf install -y nftables ipset curl
     fi
     ;;
   firewalld)
     if [ "$PKG_MANAGER" = "apt" ]; then
-      apt install -y firewalld ipset
+      apt install -y firewalld ipset curl
     else
-      dnf install -y firewalld ipset
+      dnf install -y firewalld ipset curl
     fi
     ;;
   ufw)
     if [ "$PKG_MANAGER" = "apt" ]; then
-      apt install -y ufw ipset
+      apt install -y ufw ipset curl
     else
-      dnf install -y ufw ipset
+      dnf install -y ufw ipset curl
     fi
     ;;
 esac

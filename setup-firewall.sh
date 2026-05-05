@@ -87,6 +87,11 @@ detect_firewall() {
     return
   fi
 
+  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)"; then
+    echo "iptables"
+    return
+  fi
+
   if systemctl is-active --quiet nftables 2>/dev/null; then
     echo "nftables"
     return
@@ -528,9 +533,44 @@ case "$choice" in
   *) err "invalid choice: $choice"; exit 1 ;;
 esac
 
+# --- Select iptables backend on systems using update-alternatives ---
+select_iptables_backend() {
+  local backend="$1"
+  local iptables_bin=""
+  local ip6tables_bin=""
+
+  command -v update-alternatives >/dev/null 2>&1 || return 0
+
+  case "$backend" in
+    legacy)
+      iptables_bin="/usr/sbin/iptables-legacy"
+      ip6tables_bin="/usr/sbin/ip6tables-legacy"
+      ;;
+    nft)
+      iptables_bin="/usr/sbin/iptables-nft"
+      ip6tables_bin="/usr/sbin/ip6tables-nft"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  if [ -x "$iptables_bin" ]; then
+    update-alternatives --set iptables "$iptables_bin" >/dev/null 2>&1 || true
+  fi
+  if [ -x "$ip6tables_bin" ]; then
+    update-alternatives --set ip6tables "$ip6tables_bin" >/dev/null 2>&1 || true
+  fi
+}
+
 # --- Check if already active ---
 if [ "$FIREWALL" = "$DETECTED" ]; then
   echo ""
+  if [ "$FIREWALL" = "iptables" ]; then
+    select_iptables_backend legacy
+  elif [ "$FIREWALL" = "nftables" ]; then
+    select_iptables_backend nft
+  fi
   log "$FIREWALL is already active on this system (no transition needed)."
   configure_conf
   configure_ipset_restore
@@ -719,6 +759,7 @@ esac
 log "Enabling $FIREWALL..."
 case "$FIREWALL" in
   iptables)
+    select_iptables_backend legacy
     if [ -n "$SAFE_PORTS" ]; then
       for p in $SAFE_PORTS; do
         iptables -I INPUT -p tcp --dport "$p" -j ACCEPT
@@ -731,6 +772,7 @@ case "$FIREWALL" in
     log "iptables is ready (no systemd service to enable)."
     ;;
   nftables)
+    select_iptables_backend nft
     systemctl enable nftables
     systemctl start nftables
     if [ -n "$SAFE_PORTS" ]; then

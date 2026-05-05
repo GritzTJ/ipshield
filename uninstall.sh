@@ -144,6 +144,9 @@ detect_firewall() {
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qE "^Status: active$"; then
     echo "ufw"; return
   fi
+  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)"; then
+    echo "iptables"; return
+  fi
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nftables 2>/dev/null; then
     echo "nftables"; return
   fi

@@ -4,6 +4,8 @@
 
 *Automatic malicious IP blocking via ipset & Linux firewall*
 
+**Current release: v1.0.0**
+
 **[🇬🇧 English](#english) · [🇫🇷 Français](#français)**
 
 </div>
@@ -18,6 +20,8 @@
 `ipshield` is a set of bash scripts that download public malicious IP lists, aggregate them into an ipset, and automatically apply blocking rules on the detected firewall.
 
 Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
+
+`v1.0.0` has been validated on Internet-exposed server scenarios with Ubuntu 24.04 LTS, Debian 12, Debian 13 and Fedora 44.
 
 ### Features
 
@@ -36,10 +40,21 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 
 | Firewall | Recommendation |
 |---|---|
-| **iptables** | Legacy fallback for old/minimal systems |
-| **nftables** | Recommended for Ubuntu/Debian production servers |
+| **iptables** | Legacy fallback for old/minimal systems; setup selects `iptables-legacy` when available |
+| **nftables** | Recommended for Ubuntu/Debian production servers; setup selects `iptables-nft` for ipset matching |
 | **firewalld** | Recommended for Fedora/RHEL-family production servers |
 | **ufw** | Ubuntu-friendly frontend; supported, but `nftables` is preferred for new production installs |
+
+### Validated Platforms
+
+| Platform | Firewall path validated |
+|---|---|
+| Ubuntu 24.04 LTS | nftables, ufw |
+| Debian 12 | nftables |
+| Debian 13 | nftables, iptables legacy |
+| Fedora 44 | firewalld, nftables |
+
+Validation included fresh installation, blocklist update, reboot restore, TCP/UDP inbound blocking, Docker `DOCKER-USER` protection, logging/logrotate and clean uninstall where applicable.
 
 ### Dependencies
 
@@ -128,6 +143,8 @@ See **[INSTALL.md](INSTALL.md)** for the complete guide: prerequisites, configur
 
 Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 
+`v1.0.0` a été validée sur des scénarios de serveurs exposés sur Internet avec Ubuntu 24.04 LTS, Debian 12, Debian 13 et Fedora 44.
+
 ### Fonctionnalités
 
 - **11 listes publiques d'IPv4 malveillantes** agrégées dans un seul ipset (Spamhaus, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, nœuds de sortie Tor, ranges de scanners Internet)
@@ -145,10 +162,21 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 
 | Firewall | Recommandation |
 |---|---|
-| **iptables** | Fallback legacy pour systèmes anciens/minimaux |
-| **nftables** | Recommandé pour les serveurs Ubuntu/Debian en production |
+| **iptables** | Fallback legacy pour systèmes anciens/minimaux ; le setup sélectionne `iptables-legacy` si disponible |
+| **nftables** | Recommandé pour les serveurs Ubuntu/Debian en production ; le setup sélectionne `iptables-nft` pour le match ipset |
 | **firewalld** | Recommandé pour les serveurs Fedora/RHEL et dérivés |
 | **ufw** | Frontend Ubuntu pratique ; supporté, mais `nftables` est préféré pour les nouvelles installations en production |
+
+### Plateformes validées
+
+| Plateforme | Chemin firewall validé |
+|---|---|
+| Ubuntu 24.04 LTS | nftables, ufw |
+| Debian 12 | nftables |
+| Debian 13 | nftables, iptables legacy |
+| Fedora 44 | firewalld, nftables |
+
+La validation couvre l'installation fraîche, la mise à jour de blocklist, la restauration après reboot, le blocage TCP/UDP entrant, la protection Docker `DOCKER-USER`, les logs/logrotate et la désinstallation propre lorsque applicable.
 
 ### Dépendances
 

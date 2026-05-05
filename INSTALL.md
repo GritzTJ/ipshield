@@ -1,5 +1,7 @@
 # Installation guide
 
+Current release: **v1.0.0**
+
 **[🇬🇧 English](#english) · [🇫🇷 Français](#français)**
 
 ---
@@ -8,6 +10,8 @@
 ## 🇬🇧 English
 
 Installation guide for the automatic IPv4 blocklist updater.
+
+`v1.0.0` has been validated on Ubuntu 24.04 LTS, Debian 12, Debian 13 and Fedora 44 with the recommended firewall paths described below.
 
 ### Prerequisites
 
@@ -106,6 +110,11 @@ The script:
 9. **Offers to install the rsyslog filter + logrotate**: `30-blocked-ips.conf` to redirect `BLOCKED:` to `/var/log/blocked-ips.log`, plus two logrotate configs (rotate 4 weekly). Idempotent (compares content, only rewrites if different or absent). If rsyslog is missing (e.g. minimal Debian), a sub-prompt offers to install it or stick with journald (logs viewable via `journalctl -k --grep 'BLOCKED:'`).
 
 > If the chosen firewall is already active (no transition needed), `setup-firewall.sh` jumps directly to steps 7-9.
+
+Backend selection details:
+
+- Choosing **iptables** selects `iptables-legacy`/`ip6tables-legacy` via `update-alternatives` when those binaries are available.
+- Choosing **nftables** selects `iptables-nft`/`ip6tables-nft` via `update-alternatives` when those binaries are available, because the project applies nftables-path rules through iptables-nft to keep ipset matching support.
 
 #### Step 2: Run the blocker (first execution)
 
@@ -216,11 +225,14 @@ iptables -S INPUT | grep blacklist-allow
 ./uninstall.sh --apply
 ```
 
-In `--apply` mode, after rules and ipsets are removed, two separate prompts offer to remove:
-1. ipshield cron lines from root's crontab (the rest is preserved);
-2. The `/etc/rsyslog.d/30-blocked-ips.conf` and `/etc/logrotate.d/{update-blocklist,blocked-ips}` configs (rsyslog is restarted if the filter is removed).
+In `--apply` mode, after rules and ipsets are removed, separate prompts offer to remove:
+1. `ipshield-restore.service`;
+2. ipshield cron lines from root's crontab (the rest is preserved);
+3. `/etc/update-blocklist.conf` and the ipset persistence file, usually `/var/lib/ipshield/ipset.save`;
+4. the `/etc/rsyslog.d/30-blocked-ips.conf` and `/etc/logrotate.d/{update-blocklist,blocked-ips}` configs (rsyslog is restarted if the filter is removed);
+5. ipshield log files matching `/var/log/update-blocklist.log*` and `/var/log/blocked-ips.log*`, including rotated/compressed files.
 
-Entries in `/etc/crontab` or `/etc/cron.d/*` are only listed (must be removed manually). The log files themselves (`/var/log/update-blocklist.log`, `/var/log/blocked-ips.log`) are kept.
+Entries in `/etc/crontab` or `/etc/cron.d/*` are only listed (must be removed manually). Journald/kernel entries are not purged; journal vacuuming is a global system operation.
 
 ### Docker support
 
@@ -375,10 +387,21 @@ EOF
 
 | Firewall | Recommendation |
 |---|---|
-| **iptables** | Legacy fallback for old/minimal systems |
-| **nftables** | Recommended for Ubuntu/Debian production servers |
+| **iptables** | Legacy fallback for old/minimal systems; setup selects `iptables-legacy` when available |
+| **nftables** | Recommended for Ubuntu/Debian production servers; setup selects `iptables-nft` for ipset matching |
 | **firewalld** | Recommended for Fedora/RHEL-family production servers |
 | **ufw** | Ubuntu-friendly frontend; supported, but `nftables` is preferred for new production installs |
+
+### Validated platforms
+
+| Platform | Firewall path validated |
+|---|---|
+| Ubuntu 24.04 LTS | nftables, ufw |
+| Debian 12 | nftables |
+| Debian 13 | nftables, iptables legacy |
+| Fedora 44 | firewalld, nftables |
+
+Validation included fresh installation, blocklist update, reboot restore, TCP/UDP inbound blocking, Docker `DOCKER-USER` protection, logging/logrotate and clean uninstall where applicable.
 
 ### Manual firewall configuration (alternative)
 
@@ -448,6 +471,8 @@ iptables -I DOCKER-USER 2 -i ens160 -m conntrack --ctstate NEW -m set --match-se
 ## 🇫🇷 Français
 
 Guide d'installation du script de mise à jour automatique d'un ipset de blocage IPv4.
+
+`v1.0.0` a été validée sur Ubuntu 24.04 LTS, Debian 12, Debian 13 et Fedora 44 avec les chemins firewall recommandés ci-dessous.
 
 ### Prérequis
 
@@ -546,6 +571,11 @@ Le script :
 9. **Propose d'installer le filtre rsyslog + logrotate** : `30-blocked-ips.conf` pour rediriger les `BLOCKED:` vers `/var/log/blocked-ips.log`, et deux configs logrotate (rotate 4 weekly). Idempotent (compare le contenu, ne ré-écrit que si différent ou absent). Si rsyslog est absent du système (Debian minimal par exemple), un sous-prompt propose de l'installer ou de garder journald (logs consultables via `journalctl -k --grep 'BLOCKED:'`).
 
 > Si le firewall choisi est déjà actif (pas de transition), `setup-firewall.sh` saute directement aux étapes 7 à 9.
+
+Détails de sélection du backend :
+
+- Le choix **iptables** sélectionne `iptables-legacy`/`ip6tables-legacy` via `update-alternatives` quand ces binaires sont disponibles.
+- Le choix **nftables** sélectionne `iptables-nft`/`ip6tables-nft` via `update-alternatives` quand ces binaires sont disponibles, car le projet applique les règles du chemin nftables via iptables-nft afin de conserver le support du match ipset.
 
 #### Étape 2 : Lancer le blocage (première exécution)
 
@@ -656,11 +686,14 @@ iptables -S INPUT | grep blacklist-allow
 ./uninstall.sh --apply
 ```
 
-En mode `--apply`, après suppression des règles et ipsets, deux prompts séparés proposent de retirer :
-1. les lignes cron ipshield du crontab de root (le reste est préservé) ;
-2. les configs `/etc/rsyslog.d/30-blocked-ips.conf` et `/etc/logrotate.d/{update-blocklist,blocked-ips}` (rsyslog est redémarré si le filtre est retiré).
+En mode `--apply`, après suppression des règles et ipsets, des prompts séparés proposent de retirer :
+1. `ipshield-restore.service` ;
+2. les lignes cron ipshield du crontab de root (le reste est préservé) ;
+3. `/etc/update-blocklist.conf` et le fichier de persistance ipset, généralement `/var/lib/ipshield/ipset.save` ;
+4. les configs `/etc/rsyslog.d/30-blocked-ips.conf` et `/etc/logrotate.d/{update-blocklist,blocked-ips}` (rsyslog est redémarré si le filtre est retiré) ;
+5. les fichiers de logs ipshield correspondant à `/var/log/update-blocklist.log*` et `/var/log/blocked-ips.log*`, y compris les fichiers rotatés/compressés.
 
-Les entrées dans `/etc/crontab` ou `/etc/cron.d/*` sont seulement listées (à retirer manuellement). Les fichiers de log eux-mêmes (`/var/log/update-blocklist.log`, `/var/log/blocked-ips.log`) sont conservés.
+Les entrées dans `/etc/crontab` ou `/etc/cron.d/*` sont seulement listées (à retirer manuellement). Les entrées journald/kernel ne sont pas purgées ; le vacuum du journal est une opération système globale.
 
 ### Support Docker
 
@@ -815,10 +848,21 @@ EOF
 
 | Firewall | Recommandation |
 |---|---|
-| **iptables** | Fallback legacy pour systèmes anciens/minimaux |
-| **nftables** | Recommandé pour les serveurs Ubuntu/Debian en production |
+| **iptables** | Fallback legacy pour systèmes anciens/minimaux ; le setup sélectionne `iptables-legacy` si disponible |
+| **nftables** | Recommandé pour les serveurs Ubuntu/Debian en production ; le setup sélectionne `iptables-nft` pour le match ipset |
 | **firewalld** | Recommandé pour les serveurs Fedora/RHEL et dérivés |
 | **ufw** | Frontend Ubuntu pratique ; supporté, mais `nftables` est préféré pour les nouvelles installations en production |
+
+### Plateformes validées
+
+| Plateforme | Chemin firewall validé |
+|---|---|
+| Ubuntu 24.04 LTS | nftables, ufw |
+| Debian 12 | nftables |
+| Debian 13 | nftables, iptables legacy |
+| Fedora 44 | firewalld, nftables |
+
+La validation couvre l'installation fraîche, la mise à jour de blocklist, la restauration après reboot, le blocage TCP/UDP entrant, la protection Docker `DOCKER-USER`, les logs/logrotate et la désinstallation propre lorsque applicable.
 
 ### Configuration manuelle du firewall (alternative)
 

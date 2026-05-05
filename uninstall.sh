@@ -406,14 +406,14 @@ case "$FW" in
         if ! ipset list -n 2>/dev/null | awk -v s="$ref_set" '$0==s{f=1} END{exit(f?0:1)}'; then
           sets_to_remove+=("$ref_set")
         fi
-      done < <(grep -oE -- "-A ufw-before-input -m set --match-set [^ ]+ src" /etc/ufw/before.rules 2>/dev/null | awk '{print $6}' | sort -u)
+      done < <(grep -oE -- "--match-set [^ ]+ src" /etc/ufw/before.rules 2>/dev/null | awk '{print $2}' | sort -u)
 
       if [ "${#sets_to_remove[@]}" -gt 0 ]; then
         # Snapshot for rollback if ufw reload fails.
         snapshot=/etc/ufw/before.rules.uninstall.snapshot
         cp /etc/ufw/before.rules "$snapshot"
         for ref_set in "${sets_to_remove[@]}"; do
-          sed -i "\\|^-A ufw-before-input -m set --match-set $ref_set src |d" /etc/ufw/before.rules
+          sed -i "\\|^-A ufw-before-input .*--match-set $ref_set src |d" /etc/ufw/before.rules
         done
         log "Removed ipshield/orphan rules from /etc/ufw/before.rules: ${sets_to_remove[*]}"
         if ! ufw reload; then

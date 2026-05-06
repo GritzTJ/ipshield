@@ -270,10 +270,11 @@ The script applies the following default schedule:
 
 ```
 0 */12 * * * /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
-@reboot sleep 60 && /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+@reboot sleep 60 && echo "--- Trigger: reboot on $(date '+\%Y-\%m-\%d \%H:\%M:\%S \%Z') ---" >> /var/log/update-blocklist.log && /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
 ```
 
 - `sleep 60` at `@reboot`: gives Docker time to start before the script looks for the `DOCKER-USER` chain (adjustable via the prompt).
+- The `@reboot` line writes a `Trigger: reboot` marker to `/var/log/update-blocklist.log` before the update starts, so reboot-triggered runs are easy to distinguish from scheduled cron runs.
 - `MAILTO=...` is added at the top if an email address is provided: cron sends mail on each error (stderr output).
 
 #### Manual configuration (alternative)
@@ -287,7 +288,7 @@ crontab -e
 ```
 MAILTO=admin@example.com
 0 */12 * * * /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
-@reboot sleep 60 && /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+@reboot sleep 60 && echo "--- Trigger: reboot on $(date '+\%Y-\%m-\%d \%H:\%M:\%S \%Z') ---" >> /var/log/update-blocklist.log && /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
 ```
 
 ### Logs
@@ -731,10 +732,11 @@ Le script applique le schedule par défaut suivant :
 
 ```
 0 */12 * * * /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
-@reboot sleep 60 && /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+@reboot sleep 60 && echo "--- Trigger: reboot on $(date '+\%Y-\%m-\%d \%H:\%M:\%S \%Z') ---" >> /var/log/update-blocklist.log && /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
 ```
 
 - `sleep 60` au `@reboot` : laisse le temps à Docker de démarrer avant que le script cherche la chaîne `DOCKER-USER` (ajustable via le prompt).
+- La ligne `@reboot` écrit un marqueur `Trigger: reboot` dans `/var/log/update-blocklist.log` avant le démarrage de l'update, afin de distinguer facilement les runs déclenchés par reboot des runs cron planifiés.
 - `MAILTO=...` ajouté en haut si une adresse email est fournie : cron envoie un mail à chaque erreur (sortie sur stderr).
 
 #### Configuration manuelle (alternative)
@@ -748,7 +750,7 @@ crontab -e
 ```
 MAILTO=admin@exemple.fr
 0 */12 * * * /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
-@reboot sleep 60 && /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+@reboot sleep 60 && echo "--- Trigger: reboot on $(date '+\%Y-\%m-\%d \%H:\%M:\%S \%Z') ---" >> /var/log/update-blocklist.log && /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
 ```
 
 ### Logs

@@ -172,7 +172,7 @@ configure_cron() {
   fi
 
   # Filter existing ipshield lines (by basename) + MAILTO if a new one is set
-  local filtered_cron new_lines new_cron
+  local filtered_cron new_lines new_cron reboot_log_cmd
   local script_basename mailto_drop
   script_basename="$(basename "$script_path")"
   mailto_drop=0
@@ -186,13 +186,14 @@ configure_cron() {
   filtered_cron="${filtered_cron%$'\n'}"
 
   # New lines
+  reboot_log_cmd="echo \"--- Trigger: reboot on \$(date '+\\%Y-\\%m-\\%d \\%H:\\%M:\\%S \\%Z') ---\" >> $log_path"
   new_lines=""
   [ -n "$mailto" ] && new_lines+="MAILTO=$mailto"$'\n'
   new_lines+="0 */12 * * * $script_path >> $log_path 2>&1"$'\n'
   if [ "$reboot_delay" -gt 0 ]; then
-    new_lines+="@reboot sleep $reboot_delay && $script_path >> $log_path 2>&1"
+    new_lines+="@reboot sleep $reboot_delay && $reboot_log_cmd && $script_path >> $log_path 2>&1"
   else
-    new_lines+="@reboot $script_path >> $log_path 2>&1"
+    new_lines+="@reboot $reboot_log_cmd && $script_path >> $log_path 2>&1"
   fi
 
   # Concatenation

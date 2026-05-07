@@ -593,8 +593,6 @@ select_iptables_backend() {
   local iptables_bin=""
   local ip6tables_bin=""
 
-  command -v update-alternatives >/dev/null 2>&1 || return 0
-
   case "$backend" in
     legacy)
       iptables_bin="/usr/sbin/iptables-legacy"
@@ -609,11 +607,25 @@ select_iptables_backend() {
       ;;
   esac
 
-  if [ -x "$iptables_bin" ]; then
-    update-alternatives --set iptables "$iptables_bin" >/dev/null 2>&1 || true
+  if ! command -v update-alternatives >/dev/null 2>&1; then
+    err "cannot switch iptables backend to '$backend': update-alternatives is not available."
+    return 1
+  fi
+
+  if [ ! -x "$iptables_bin" ]; then
+    err "iptables backend '$backend' requested but $iptables_bin is missing."
+    return 1
+  fi
+  if ! update-alternatives --set iptables "$iptables_bin" >/dev/null 2>&1; then
+    err "cannot switch iptables backend to $iptables_bin."
+    return 1
   fi
   if [ -x "$ip6tables_bin" ]; then
-    update-alternatives --set ip6tables "$ip6tables_bin" >/dev/null 2>&1 || true
+    if ! update-alternatives --set ip6tables "$ip6tables_bin" >/dev/null 2>&1; then
+      err "Warning: cannot switch ip6tables backend to $ip6tables_bin."
+    fi
+  else
+    err "Warning: ip6tables backend binary $ip6tables_bin is missing; IPv6 backend was not switched."
   fi
 }
 
@@ -640,7 +652,16 @@ ensure_iptables_backend() {
     exit 1
   fi
 
-  select_iptables_backend "$backend"
+  if ! select_iptables_backend "$backend"; then
+    err "Cannot switch iptables backend to '$backend'."
+    exit 1
+  fi
+
+  current="$(current_iptables_backend)"
+  if [ "$current" != "$backend" ]; then
+    err "Requested iptables backend '$backend' but current backend is '$current'."
+    exit 1
+  fi
 }
 
 # Docker owns iptables/nft compatibility chains while it is running. Firewall
@@ -715,10 +736,10 @@ if [ -n "$LISTENING" ]; then
   done <<< "$LISTENING"
   echo ""
   DEFAULT_PORTS="$(echo "$LISTENING" | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')"
-  read -rp "Ports to open before activation (default: $DEFAULT_PORTS, edit the list or 'no' to skip): " SAFE_PORTS
+  read -rp "TCP ports to open before activation (default: $DEFAULT_PORTS, edit the list or 'no' to skip): " SAFE_PORTS
   [ -z "$SAFE_PORTS" ] && SAFE_PORTS="$DEFAULT_PORTS"
 else
-  read -rp "Ports to open before activation (space-separated, empty to skip): " SAFE_PORTS
+  read -rp "TCP ports to open before activation (space-separated, empty to skip): " SAFE_PORTS
 fi
 
 # Handle explicit refusal

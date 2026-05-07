@@ -358,6 +358,29 @@ _firewalld_remove_direct_rule() {
   return 1
 }
 
+_firewalld_remove_set_rules_with_reload_hint() {
+  local chain="$1"
+  local set="$2"
+  local line
+  local removed=1
+  while true; do
+    line="$(_firewalld_get_all_direct_rules \
+      | grep -E "^ipv4 filter $chain .*--match-set $set src" \
+      | head -1 || true)"
+    [ -z "$line" ] && break
+    _firewalld_parse_direct_rule_line "$line"
+    if ! _firewalld_remove_direct_rule "${FIREWALLD_DIRECT_RULE_ARGS[@]}"; then
+      err "Warning: cannot remove firewalld direct rule: $line"
+      # If at least one previous removal succeeded, the caller still needs to
+      # reload/restart firewalld so runtime state matches the changed permanent
+      # config as closely as possible.
+      return "$removed"
+    fi
+    removed=0
+  done
+  return "$removed"
+}
+
 _firewalld_reload_or_restart() {
   if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1; then
     return 0
@@ -387,21 +410,7 @@ _remove_firewalld_block_rules() {
 _remove_firewalld_set_rules() {
   local chain="$1"
   local set="$2"
-  local line
-  local removed=1
-  while true; do
-    line="$(_firewalld_get_all_direct_rules \
-      | grep -E "^ipv4 filter $chain .*--match-set $set src" \
-      | head -1 || true)"
-    [ -z "$line" ] && break
-    _firewalld_parse_direct_rule_line "$line"
-    if ! _firewalld_remove_direct_rule "${FIREWALLD_DIRECT_RULE_ARGS[@]}"; then
-      err "Warning: cannot remove firewalld direct rule: $line"
-      return 1
-    fi
-    removed=0
-  done
-  return "$removed"
+  _firewalld_remove_set_rules_with_reload_hint "$chain" "$set"
 }
 
 # --- ufw before.rules hygiene ---
@@ -481,6 +490,30 @@ _ufw_preflight_ipsets() {
   fi
 }
 
+_ufw_snapshot_before_rules() {
+  local snapshot="$1"
+  cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
+  cp /etc/ufw/before.rules "$snapshot"
+}
+
+_ufw_reload_or_rollback() {
+  local snapshot="$1"
+  local action="$2"
+
+  if ufw reload; then
+    return 0
+  fi
+
+  err "ufw: reload failed after $action; restoring /etc/ufw/before.rules snapshot."
+  cp "$snapshot" /etc/ufw/before.rules
+  if ufw reload; then
+    err "ufw: restored /etc/ufw/before.rules snapshot after reload failure."
+  else
+    err "ufw: reload still failing after rollback. Inspect /etc/ufw/before.rules manually."
+  fi
+  return 1
+}
+
 _save_persistent_ipsets() {
   [ "$PERSIST_IPSET" -eq 1 ] || return 0
 
@@ -504,7 +537,9 @@ _save_persistent_ipsets() {
   # A generic var_lib_t save file is not readable there, so label the file when
   # the policy type exists. Ubuntu/Debian without SELinux simply skip this.
   if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled && command -v chcon >/dev/null 2>&1; then
-    chcon -t iptables_var_lib_t "$IPSET_SAVE_FILE" 2>/dev/null || true
+    if ! chcon -t iptables_var_lib_t "$IPSET_SAVE_FILE" 2>/dev/null; then
+      err "Warning: cannot label $IPSET_SAVE_FILE as iptables_var_lib_t. ipshield-restore.service may fail under SELinux."
+    fi
   fi
   log "ipset persistence saved: $IPSET_SAVE_FILE"
 }
@@ -568,7 +603,7 @@ _apply_whitelist_iptables() {
   if [ -n "$iface" ]; then
     expected_pattern="-i $iface .*--match-set $WHITELIST_SET_NAME src .*-j ACCEPT$"
   else
-    expected_pattern="^-A $chain -m set --match-set $WHITELIST_SET_NAME src -j ACCEPT$"
+    expected_pattern="^-A $chain .*--match-set $WHITELIST_SET_NAME src .*-j ACCEPT$"
   fi
   if echo "$first_rule" | grep -qE -- "$expected_pattern"; then
     return
@@ -620,6 +655,14 @@ _whitelist_or_cleanup_firewalld() {
   return 1
 }
 
+_warn_hidden_docker_chains() {
+  if docker_iptables_chains_present; then
+    err "Warning: Docker chains exist outside the current iptables backend; DOCKER-USER was not modified."
+    return 0
+  fi
+  return 1
+}
+
 # --- Firewall rules application ---
 apply_firewall_rules() {
   local fw="$1"
@@ -643,6 +686,8 @@ apply_firewall_rules() {
         _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "iptables DOCKER-USER rules added (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
         _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
+      else
+        _warn_hidden_docker_chains || true
       fi
       ;;
 
@@ -659,6 +704,8 @@ apply_firewall_rules() {
         _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "nftables DOCKER-USER rules added via iptables-nft (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
         _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
+      else
+        _warn_hidden_docker_chains || true
       fi
       ;;
 
@@ -686,7 +733,8 @@ apply_firewall_rules() {
       fi
       fw_log_args+=( -j LOG --log-prefix "BLOCKED: " --log-level 4 )
 
-      if ! firewall-cmd --permanent --direct --query-rule ipv4 filter INPUT 1 "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP >/dev/null 2>/dev/null; then
+      if ! firewall-cmd --permanent --direct --query-rule ipv4 filter INPUT 0 "${fw_log_args[@]}" >/dev/null 2>/dev/null \
+        || ! firewall-cmd --permanent --direct --query-rule ipv4 filter INPUT 1 "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP >/dev/null 2>/dev/null; then
         _remove_firewalld_block_rules INPUT
         firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 "${fw_log_args[@]}" >/dev/null
         firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP >/dev/null
@@ -702,32 +750,32 @@ apply_firewall_rules() {
         _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "firewalld Docker rules added via iptables DOCKER-USER (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
         _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
-      elif docker_iptables_chains_present; then
-        err "Warning: Docker chains exist outside the current iptables backend; DOCKER-USER was not modified."
+      else
+        _warn_hidden_docker_chains || true
       fi
       ;;
 
     ufw)
-      _ufw_preflight_ipsets
-
       local ufw_drop_line="-A ufw-before-input -m conntrack --ctstate NEW -m set --match-set $SET_NAME src -j DROP"
-      if ! grep -qF "$ufw_drop_line" /etc/ufw/before.rules 2>/dev/null; then
-        # Backup before modification (protects against sed corruption)
-        cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
+      local ufw_log_line
+      if [ -n "$LOG_LIMIT" ]; then
+        ufw_log_line="-A ufw-before-input -m conntrack --ctstate NEW -m set --match-set $SET_NAME src -m limit --limit $LOG_LIMIT --limit-burst $LOG_BURST -j LOG --log-prefix \"BLOCKED: \" --log-level 4"
+      else
+        ufw_log_line="-A ufw-before-input -m conntrack --ctstate NEW -m set --match-set $SET_NAME src -j LOG --log-prefix \"BLOCKED: \" --log-level 4"
+      fi
+      if ! grep -qF "$ufw_log_line" /etc/ufw/before.rules 2>/dev/null || ! grep -qF "$ufw_drop_line" /etc/ufw/before.rules 2>/dev/null; then
+        local ufw_snapshot
+        ufw_snapshot="${TMP_DIR}/ufw-before.rules.blocklist"
+        _ufw_snapshot_before_rules "$ufw_snapshot"
         sed -i "\\|^-A ufw-before-input .*--match-set $SET_NAME src.*-j LOG|d;\\|^-A ufw-before-input .*--match-set $SET_NAME src.*-j DROP|d" /etc/ufw/before.rules
-        # Build the LOG line according to LOG_LIMIT
-        local ufw_log_line
-        if [ -n "$LOG_LIMIT" ]; then
-          ufw_log_line="-A ufw-before-input -m conntrack --ctstate NEW -m set --match-set $SET_NAME src -m limit --limit $LOG_LIMIT --limit-burst $LOG_BURST -j LOG --log-prefix \"BLOCKED: \" --log-level 4"
-        else
-          ufw_log_line="-A ufw-before-input -m conntrack --ctstate NEW -m set --match-set $SET_NAME src -j LOG --log-prefix \"BLOCKED: \" --log-level 4"
-        fi
         sed -i "/*filter/,/COMMIT/ {
           /COMMIT/ i\\
 $ufw_log_line\\
 $ufw_drop_line
         }" /etc/ufw/before.rules
-        ufw reload
+        if ! _ufw_reload_or_rollback "$ufw_snapshot" "blocklist rule update"; then
+          return 1
+        fi
         log "ufw rules added (LOG + DROP)."
       fi
       # Whitelist: add or remove from before.rules at the top of ufw-before-input
@@ -735,20 +783,28 @@ $ufw_drop_line
       local wl_present=0
       grep -q "$wl_marker" /etc/ufw/before.rules 2>/dev/null && wl_present=1
       if [ "${#WHITELIST[@]}" -gt 0 ] && [ "$wl_present" -eq 0 ]; then
-        cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
+        local ufw_snapshot
+        ufw_snapshot="${TMP_DIR}/ufw-before.rules.whitelist-add"
+        _ufw_snapshot_before_rules "$ufw_snapshot"
         # Insert the ACCEPT rule just before the FIRST ufw-before-input blocklist rule.
         # The "0,/pattern/" range scopes the inner /pattern/i action to the first match
         # only, otherwise sed would insert the ACCEPT before every matching rule (LOG + DROP).
-        sed -i "0,/-A ufw-before-input -m set --match-set $SET_NAME src/{
-/-A ufw-before-input -m set --match-set $SET_NAME src/i\\
+        sed -i "0,/-A ufw-before-input .*--match-set $SET_NAME src/{
+/-A ufw-before-input .*--match-set $SET_NAME src/i\\
 -A ufw-before-input -m set --match-set $WHITELIST_SET_NAME src -j ACCEPT
 }" /etc/ufw/before.rules
-        ufw reload
+        if ! _ufw_reload_or_rollback "$ufw_snapshot" "whitelist rule insertion"; then
+          return 1
+        fi
         log "ufw whitelist rule added (ACCEPT)."
       elif [ "${#WHITELIST[@]}" -eq 0 ] && [ "$wl_present" -eq 1 ]; then
-        cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
+        local ufw_snapshot
+        ufw_snapshot="${TMP_DIR}/ufw-before.rules.whitelist-remove"
+        _ufw_snapshot_before_rules "$ufw_snapshot"
         sed -i "/match-set $WHITELIST_SET_NAME src -j ACCEPT/d" /etc/ufw/before.rules
-        ufw reload
+        if ! _ufw_reload_or_rollback "$ufw_snapshot" "whitelist rule removal"; then
+          return 1
+        fi
         log "ufw whitelist rule removed (ACCEPT)."
       fi
       # Docker uses iptables directly, outside ufw scope
@@ -756,6 +812,8 @@ $ufw_drop_line
         _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "DOCKER-USER rules added (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
         _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
+      else
+        _warn_hidden_docker_chains || true
       fi
       ;;
   esac

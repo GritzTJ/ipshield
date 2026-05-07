@@ -71,6 +71,10 @@ grep -q 'Docker chains detected outside the current iptables backend' uninstall.
   || fail "uninstall.sh must warn when Docker chains are hidden by another iptables backend"
 ok "uninstall.sh warns on hidden Docker chains"
 
+grep -q '_warn_hidden_docker_chains' update-blocklist.sh \
+  || fail "update-blocklist.sh must warn when Docker chains are hidden by another iptables backend"
+ok "update-blocklist.sh warns on hidden Docker chains"
+
 grep -q 'if remove_firewalld_rules DOCKER-USER; then need_reload=1; fi' uninstall.sh \
   || fail "uninstall.sh must remove stale firewalld DOCKER-USER rules even when Docker is stopped"
 ok "uninstall.sh removes stale firewalld DOCKER-USER rules without Docker"
@@ -96,9 +100,39 @@ if [ -z "$docker_cleanup_line" ] || [ -z "$input_query_line" ] || [ "$docker_cle
 fi
 ok "firewalld stale DOCKER-USER cleanup runs before INPUT changes"
 
+grep -q '_firewalld_remove_set_rules_with_reload_hint' update-blocklist.sh \
+  || fail "firewalld partial direct-rule cleanup must still hint reload when a removal succeeded"
+ok "firewalld partial set-rule cleanup keeps reload signal"
+
+grep -q '_ufw_reload_or_rollback' update-blocklist.sh \
+  || fail "ufw before.rules edits must rollback when ufw reload fails"
+grep -q 'ufw-before-input .*--match-set $SET_NAME src' update-blocklist.sh \
+  || fail "ufw whitelist insertion must match conntrack-prefixed blocklist rules"
+ok "ufw rule edits have rollback and generic whitelist insertion"
+
+grep -qF 'expected_pattern="^-A $chain .*--match-set $WHITELIST_SET_NAME src .*-j ACCEPT$"' update-blocklist.sh \
+  || fail "iptables whitelist detection without iface must tolerate extra match modules"
+ok "iptables whitelist detection is tolerant without iface"
+
 grep -q 'validate_root_config_file "$conf_path" || return 1' setup-firewall.sh \
   || fail "setup-firewall.sh must validate /etc/update-blocklist.conf before sourcing"
 ok "setup-firewall.sh validates config before sourcing"
+
+grep -q 'requested but \$iptables_bin is missing' setup-firewall.sh \
+  || fail "setup-firewall.sh must fail loudly when requested iptables backend binary is missing"
+grep -q "Requested iptables backend" setup-firewall.sh \
+  || fail "setup-firewall.sh must verify backend switch result"
+! grep -q 'update-alternatives >/dev/null 2>&1 || return 0' setup-firewall.sh \
+  || fail "setup-firewall.sh must not silently skip missing update-alternatives"
+ok "setup-firewall.sh fails loudly on missing/unchanged iptables backend"
+
+grep -q 'TCP ports to open before activation' setup-firewall.sh \
+  || fail "setup-firewall.sh anti-lockout prompt must state that only TCP ports are auto-detected/opened"
+ok "setup-firewall.sh labels anti-lockout ports as TCP"
+
+grep -q 'cannot label $IPSET_SAVE_FILE as iptables_var_lib_t' update-blocklist.sh \
+  || fail "update-blocklist.sh must warn when SELinux ipset save labeling fails"
+ok "SELinux labeling failure is logged"
 
 echo
 echo "OK $PASS static regression checks"

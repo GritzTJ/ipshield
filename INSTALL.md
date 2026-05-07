@@ -329,7 +329,7 @@ To adjust:
 - `LOG_LIMIT=""` (empty): no rate-limit, logs **everything** (real risk under attack)
 - See `update-blocklist.conf.example` for details
 
-For iptables/nftables/DOCKER-USER, drift is auto-detected: change `LOG_LIMIT` and run `update-blocklist.sh` to update the rules. For **ufw** (via `/etc/ufw/before.rules`) and **firewalld INPUT** (via `--direct`), changing the value requires `./uninstall.sh --apply` then re-running `update-blocklist.sh`.
+For iptables/nftables/firewalld/ufw/DOCKER-USER, drift is auto-detected: change `LOG_LIMIT` and run `update-blocklist.sh` to update the rules.
 
 Rules applied by `update-blocklist.sh` all use the `BLOCKED: ` prefix in their logs, regardless of the firewall:
 
@@ -796,7 +796,7 @@ Pour ajuster :
 - `LOG_LIMIT=""` (vide) : pas de rate-limit, loggue **tout** (risque réel sous attaque)
 - voir `update-blocklist.conf.example` pour les détails
 
-Pour iptables/nftables/DOCKER-USER, le drift est détecté automatiquement : changer `LOG_LIMIT` et lancer `update-blocklist.sh` met à jour les règles. Pour **ufw** (via `/etc/ufw/before.rules`) et **firewalld INPUT** (via `--direct`), un changement de valeur nécessite `./uninstall.sh --apply` puis ré-exécution de `update-blocklist.sh`.
+Pour iptables/nftables/firewalld/ufw/DOCKER-USER, le drift est détecté automatiquement : changer `LOG_LIMIT` et lancer `update-blocklist.sh` met à jour les règles.
 
 Les règles appliquées par `update-blocklist.sh` utilisent toutes le préfixe `BLOCKED: ` dans leurs logs, quel que soit le firewall :
 

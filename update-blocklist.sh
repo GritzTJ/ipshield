@@ -216,6 +216,25 @@ trap cleanup EXIT INT TERM
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { err "Error: missing command: $1"; exit 1; }; }
 
 # --- Active firewall detection ---
+iptables_input_rules_present() {
+  command -v iptables >/dev/null 2>&1 || return 1
+  iptables -S INPUT 2>/dev/null | awk '$1 == "-A" { found=1 } END { exit(found ? 0 : 1) }'
+}
+
+nft_input_hook_present() {
+  command -v nft >/dev/null 2>&1 || return 1
+  nft list ruleset 2>/dev/null | awk '
+    /hook input/ { in_input=1; next }
+    in_input && /^[[:space:]]*}/ { in_input=0; next }
+    in_input {
+      line=$0
+      sub(/^[[:space:]]+/, "", line)
+      if (line != "" && line !~ /^#/) found=1
+    }
+    END { exit(found ? 0 : 1) }
+  '
+}
+
 detect_firewall() {
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet firewalld 2>/dev/null; then
     echo "firewalld"
@@ -228,7 +247,7 @@ detect_firewall() {
     return
   fi
 
-  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)"; then
+  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)" && iptables_input_rules_present; then
     echo "iptables"
     return
   fi
@@ -237,12 +256,12 @@ detect_firewall() {
     echo "nftables"
     return
   fi
-  if command -v nft >/dev/null 2>&1 && nft list ruleset 2>/dev/null | grep -q .; then
+  if nft_input_hook_present; then
     echo "nftables"
     return
   fi
 
-  if command -v iptables >/dev/null 2>&1 && iptables -L -n 2>/dev/null | grep -q "^Chain"; then
+  if iptables_input_rules_present; then
     # Skip leftover ufw chains if ufw is installed but inactive
     if ! command -v ufw >/dev/null 2>&1 || ! iptables -L -n 2>/dev/null | grep -q "^Chain ufw-"; then
       echo "iptables"
@@ -256,6 +275,15 @@ detect_firewall() {
 # --- Docker detection (DOCKER-USER chain) ---
 detect_docker() {
   iptables -L DOCKER-USER -n >/dev/null 2>&1
+}
+
+require_iptables_nft_backend() {
+  if ! iptables -V 2>/dev/null | grep -q "(nf_tables)"; then
+    err "Error: nftables mode requires the iptables-nft backend."
+    err "  Current backend: $(iptables -V 2>/dev/null || echo unknown)"
+    err "  Run setup-firewall.sh with nftables selected while Docker is stopped if a backend switch is needed."
+    return 1
+  fi
 }
 
 # --- Remove iptables rules matching a grep -E pattern on a chain ---
@@ -543,6 +571,7 @@ apply_firewall_rules() {
       # commands to nft rules while supporting ipset matching via the kernel
       # xt_set module.
       need_cmd iptables
+      require_iptables_nft_backend
       _apply_iptables_rules INPUT && log "nftables rules added via iptables-nft (LOG + DROP)."
       _whitelist_or_cleanup_iptables INPUT
       if detect_docker; then

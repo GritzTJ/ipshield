@@ -116,7 +116,7 @@ Backend selection details:
 - Choosing **iptables** selects `iptables-legacy`/`ip6tables-legacy` via `update-alternatives` when those binaries are available.
 - Choosing **nftables** selects `iptables-nft`/`ip6tables-nft` via `update-alternatives` when those binaries are available, because the project applies nftables-path rules through iptables-nft to keep ipset matching support.
 
-Docker safety: if Docker-managed iptables chains are present while an iptables firewall transition would require flushing tables, `setup-firewall.sh` refuses the transition instead of deleting Docker NAT/filter chains. Run firewall transitions before starting Docker, or stop Docker and perform the transition during a maintenance window.
+Docker safety: if Docker-managed iptables chains are present, `setup-firewall.sh` refuses firewall transitions and iptables backend switches instead of risking deletion or hiding of Docker NAT/filter chains. Run firewall transitions before starting Docker, or stop Docker and perform the transition during a maintenance window.
 
 #### Step 2: Run the blocker (first execution)
 
@@ -252,7 +252,7 @@ Blocklist rules are also scoped to `conntrack --ctstate NEW`. For TCP, this mean
 
 - Docker recreates `DOCKER-USER` on each daemon restart — rules do not persist. The cron + `@reboot` automatically reapplies them, and idempotency avoids duplicates.
 - If the script runs at boot before Docker, `DOCKER-USER` does not exist yet — the detection is correctly negative. The next cron run picks it up.
-- `setup-firewall.sh` does not flush Docker-managed iptables chains. If Docker reports a missing `DOCKER` chain after a manual firewall change, restart Docker so it recreates its NAT/filter chains.
+- `setup-firewall.sh` does not perform firewall transitions or iptables backend switches while Docker-managed iptables chains are present. If Docker reports a missing `DOCKER` chain after a manual firewall change, restart Docker so it recreates its NAT/filter chains.
 - No configuration needed if WAN auto-detection works: detection and application are fully automatic.
 
 Verification after a run:
@@ -581,7 +581,7 @@ Détails de sélection du backend :
 - Le choix **iptables** sélectionne `iptables-legacy`/`ip6tables-legacy` via `update-alternatives` quand ces binaires sont disponibles.
 - Le choix **nftables** sélectionne `iptables-nft`/`ip6tables-nft` via `update-alternatives` quand ces binaires sont disponibles, car le projet applique les règles du chemin nftables via iptables-nft afin de conserver le support du match ipset.
 
-Sécurité Docker : si des chaînes iptables gérées par Docker sont présentes alors qu'une transition depuis un firewall iptables nécessiterait un flush des tables, `setup-firewall.sh` refuse la transition au lieu de supprimer les chaînes NAT/filter de Docker. Effectuer les transitions firewall avant de démarrer Docker, ou arrêter Docker et faire la transition pendant une fenêtre de maintenance.
+Sécurité Docker : si des chaînes iptables gérées par Docker sont présentes, `setup-firewall.sh` refuse les transitions firewall et les changements de backend iptables au lieu de risquer de supprimer ou masquer les chaînes NAT/filter de Docker. Effectuer les transitions firewall avant de démarrer Docker, ou arrêter Docker et faire la transition pendant une fenêtre de maintenance.
 
 #### Étape 2 : Lancer le blocage (première exécution)
 
@@ -717,7 +717,7 @@ Les règles blocklist sont aussi limitées à `conntrack --ctstate NEW`. Pour TC
 
 - Docker recrée `DOCKER-USER` à chaque restart du daemon — les règles ne persistent pas. Le cron + `@reboot` les réapplique automatiquement, et l'idempotence évite les doublons.
 - Si le script s'exécute au boot avant Docker, `DOCKER-USER` n'existe pas encore — la détection est correctement négative. Le prochain cron rattrapera.
-- `setup-firewall.sh` ne flush pas les chaînes iptables gérées par Docker. Si Docker signale une chaîne `DOCKER` manquante après un changement manuel de firewall, redémarrer Docker pour qu'il recrée ses chaînes NAT/filter.
+- `setup-firewall.sh` ne fait pas de transition firewall ni de changement de backend iptables lorsque des chaînes iptables gérées par Docker sont présentes. Si Docker signale une chaîne `DOCKER` manquante après un changement manuel de firewall, redémarrer Docker pour qu'il recrée ses chaînes NAT/filter.
 - Aucune configuration nécessaire si l'auto-détection WAN fonctionne : la détection et l'application sont entièrement automatiques.
 
 Vérification après exécution :

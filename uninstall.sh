@@ -137,6 +137,25 @@ else
 fi
 
 # --- Firewall detection ---
+iptables_input_rules_present() {
+  command -v iptables >/dev/null 2>&1 || return 1
+  iptables -S INPUT 2>/dev/null | awk '$1 == "-A" { found=1 } END { exit(found ? 0 : 1) }'
+}
+
+nft_input_hook_present() {
+  command -v nft >/dev/null 2>&1 || return 1
+  nft list ruleset 2>/dev/null | awk '
+    /hook input/ { in_input=1; next }
+    in_input && /^[[:space:]]*}/ { in_input=0; next }
+    in_input {
+      line=$0
+      sub(/^[[:space:]]+/, "", line)
+      if (line != "" && line !~ /^#/) found=1
+    }
+    END { exit(found ? 0 : 1) }
+  '
+}
+
 detect_firewall() {
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet firewalld 2>/dev/null; then
     echo "firewalld"; return
@@ -145,16 +164,16 @@ detect_firewall() {
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qE "^Status: active$"; then
     echo "ufw"; return
   fi
-  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)"; then
+  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)" && iptables_input_rules_present; then
     echo "iptables"; return
   fi
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nftables 2>/dev/null; then
     echo "nftables"; return
   fi
-  if command -v nft >/dev/null 2>&1 && nft list ruleset 2>/dev/null | grep -q .; then
+  if nft_input_hook_present; then
     echo "nftables"; return
   fi
-  if command -v iptables >/dev/null 2>&1 && iptables -L -n 2>/dev/null | grep -q "^Chain"; then
+  if iptables_input_rules_present; then
     if ! command -v ufw >/dev/null 2>&1 || ! iptables -L -n 2>/dev/null | grep -q "^Chain ufw-"; then
       echo "iptables"; return
     fi
@@ -167,13 +186,9 @@ detect_docker() {
 }
 
 # --- iptables removal (idempotent, removes all occurrences) ---
-remove_iptables_rules() {
+remove_matching_iptables_rules() {
   local chain="$1"
-  # Whitelist ACCEPT
-  while iptables -C "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT 2>/dev/null; do
-    iptables -D "$chain" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT
-  done
-  # Blacklist LOG/DROP: generic removal (any limit/conntrack values)
+  local pattern="$2"
   local line rule_num n
   while true; do
     rule_num=""
@@ -181,7 +196,7 @@ remove_iptables_rules() {
     while IFS= read -r line; do
       [[ "$line" == "-A $chain "* ]] || continue
       n=$((n + 1))
-      if printf '%s\n' "$line" | grep -qE -- "--match-set $SET_NAME src.*-j (LOG|DROP)"; then
+      if printf '%s\n' "$line" | grep -qE -- "$pattern"; then
         rule_num="$n"
         break
       fi
@@ -189,6 +204,14 @@ remove_iptables_rules() {
     [ -z "$rule_num" ] && break
     iptables -D "$chain" "$rule_num"
   done
+}
+
+remove_iptables_rules() {
+  local chain="$1"
+  # Whitelist ACCEPT, with or without interface constraints.
+  remove_matching_iptables_rules "$chain" "--match-set $WHITELIST_SET_NAME src.*-j ACCEPT"
+  # Blacklist LOG/DROP: generic removal (any limit/conntrack values)
+  remove_matching_iptables_rules "$chain" "--match-set $SET_NAME src.*-j (LOG|DROP)"
 }
 
 # --- firewalld --direct removal (generic: matches any limit values) ---

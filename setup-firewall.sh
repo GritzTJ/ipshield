@@ -82,13 +82,27 @@ iptables_input_rules_present() {
 }
 
 docker_iptables_chains_present() {
-  command -v iptables >/dev/null 2>&1 || return 1
-  iptables -t nat -S DOCKER >/dev/null 2>&1 || iptables -S DOCKER-USER >/dev/null 2>&1
+  local bin
+  for bin in iptables iptables-nft iptables-legacy; do
+    command -v "$bin" >/dev/null 2>&1 || continue
+    "$bin" -t nat -S DOCKER >/dev/null 2>&1 && return 0
+    "$bin" -S DOCKER-USER >/dev/null 2>&1 && return 0
+  done
+  return 1
 }
 
 nft_input_hook_present() {
   command -v nft >/dev/null 2>&1 || return 1
-  nft list ruleset 2>/dev/null | grep -q "hook input"
+  nft list ruleset 2>/dev/null | awk '
+    /hook input/ { in_input=1; next }
+    in_input && /^[[:space:]]*}/ { in_input=0; next }
+    in_input {
+      line=$0
+      sub(/^[[:space:]]+/, "", line)
+      if (line != "" && line !~ /^#/) found=1
+    }
+    END { exit(found ? 0 : 1) }
+  '
 }
 
 detect_firewall() {
@@ -187,7 +201,7 @@ configure_cron() {
   fi
 
   # Filter existing ipshield lines (by basename) + MAILTO if a new one is set
-  local filtered_cron new_lines new_cron reboot_log_cmd
+  local filtered_cron new_lines new_cron reboot_log_cmd script_cmd log_cmd
   local script_basename mailto_drop
   script_basename="$(basename "$script_path")"
   mailto_drop=0
@@ -201,14 +215,19 @@ configure_cron() {
   filtered_cron="${filtered_cron%$'\n'}"
 
   # New lines
-  reboot_log_cmd="echo \"--- Trigger: reboot on \$(date '+\\%Y-\\%m-\\%d \\%H:\\%M:\\%S \\%Z') ---\" >> $log_path"
+  shell_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+  }
+  script_cmd="$(shell_quote "$script_path")"
+  log_cmd="$(shell_quote "$log_path")"
+  reboot_log_cmd="echo \"--- Trigger: reboot on \$(date '+\\%Y-\\%m-\\%d \\%H:\\%M:\\%S \\%Z') ---\" >> $log_cmd"
   new_lines=""
   [ -n "$mailto" ] && new_lines+="MAILTO=$mailto"$'\n'
-  new_lines+="0 */12 * * * $script_path >> $log_path 2>&1"$'\n'
+  new_lines+="0 */12 * * * $script_cmd >> $log_cmd 2>&1"$'\n'
   if [ "$reboot_delay" -gt 0 ]; then
-    new_lines+="@reboot sleep $reboot_delay && $reboot_log_cmd && $script_path >> $log_path 2>&1"
+    new_lines+="@reboot sleep $reboot_delay && $reboot_log_cmd && $script_cmd >> $log_cmd 2>&1"
   else
-    new_lines+="@reboot $reboot_log_cmd && $script_path >> $log_path 2>&1"
+    new_lines+="@reboot $reboot_log_cmd && $script_cmd >> $log_cmd 2>&1"
   fi
 
   # Concatenation
@@ -580,13 +599,50 @@ select_iptables_backend() {
   fi
 }
 
+current_iptables_backend() {
+  command -v iptables >/dev/null 2>&1 || { echo "none"; return; }
+  case "$(iptables -V 2>/dev/null || true)" in
+    *"(legacy)"*) echo "legacy" ;;
+    *"(nf_tables)"*) echo "nft" ;;
+    *) echo "unknown" ;;
+  esac
+}
+
+ensure_iptables_backend() {
+  local backend="$1"
+  local current
+  current="$(current_iptables_backend)"
+
+  [ "$current" = "$backend" ] && return 0
+
+  if docker_iptables_chains_present; then
+    err "Docker-managed iptables chains detected."
+    err "Refusing to switch iptables backend from '$current' to '$backend' while Docker is active."
+    err "Stop Docker and rerun setup during a maintenance window, or keep the current backend."
+    exit 1
+  fi
+
+  select_iptables_backend "$backend"
+}
+
+# Docker owns iptables/nft compatibility chains while it is running. Firewall
+# transitions can delete or hide those chains (especially nat/DOCKER), breaking
+# published ports. Require Docker to be stopped for any transition; the already
+# active firewall path remains allowed as long as no backend switch is needed.
+if [ "$FIREWALL" != "$DETECTED" ] && docker_iptables_chains_present; then
+  err "Docker-managed iptables chains detected."
+  err "Refusing firewall transition from '$DETECTED' to '$FIREWALL' while Docker is active."
+  err "Stop Docker and rerun setup during a maintenance window, or choose the already-active firewall."
+  exit 1
+fi
+
 # --- Check if already active ---
 if [ "$FIREWALL" = "$DETECTED" ]; then
   echo ""
   if [ "$FIREWALL" = "iptables" ]; then
-    select_iptables_backend legacy
+    ensure_iptables_backend legacy
   elif [ "$FIREWALL" = "nftables" ]; then
-    select_iptables_backend nft
+    ensure_iptables_backend nft
   fi
   log "$FIREWALL is already active on this system (no transition needed)."
   configure_conf
@@ -782,7 +838,7 @@ esac
 log "Enabling $FIREWALL..."
 case "$FIREWALL" in
   iptables)
-    select_iptables_backend legacy
+    ensure_iptables_backend legacy
     if [ -n "$SAFE_PORTS" ]; then
       for p in $SAFE_PORTS; do
         iptables -I INPUT -p tcp --dport "$p" -j ACCEPT
@@ -795,7 +851,7 @@ case "$FIREWALL" in
     log "iptables is ready (no systemd service to enable)."
     ;;
   nftables)
-    select_iptables_backend nft
+    ensure_iptables_backend nft
     systemctl enable nftables
     systemctl start nftables
     if [ -n "$SAFE_PORTS" ]; then

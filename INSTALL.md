@@ -242,6 +242,8 @@ On a Docker host, traffic destined for containers (ports published via `-p` / `p
 
 The script automatically detects Docker via the `DOCKER-USER` chain in iptables. When present, the same LOG + DROP rules are applied on `DOCKER-USER` in addition to `INPUT`, **scoped to the WAN interface** (`-i $WAN_INTERFACE`) to filter only **inbound** traffic from the Internet to containers. Outbound traffic from containers (which goes via `IN=br-xxx`) is never filtered, in line with the "filter inbound only" principle.
 
+On **firewalld**, `INPUT` rules are still managed through permanent direct rules, but Docker `DOCKER-USER` rules are applied at runtime through iptables only. They are deliberately not stored as permanent firewalld direct rules, because firewalld can fail to start or reload if Docker has not created `DOCKER-USER` yet. If an older ipshield version left such permanent rules behind, the next `update-blocklist.sh` run removes them before applying runtime Docker rules.
+
 Blocklist rules are also scoped to `conntrack --ctstate NEW`. For TCP, this means normal inbound connections are blocked at connection start (the SYN path), while replies to outbound connections already tracked as `ESTABLISHED` are not dropped just because the remote IP appears in a public blocklist.
 
 **WAN interface auto-detection**: by default, the script detects the interface via `ip route get 8.8.8.8`. If auto-detection picks the wrong interface (VPN/multi-homed), set `WAN_INTERFACE="ens160"` in `/etc/update-blocklist.conf`.
@@ -327,7 +329,7 @@ To adjust:
 - `LOG_LIMIT=""` (empty): no rate-limit, logs **everything** (real risk under attack)
 - See `update-blocklist.conf.example` for details
 
-For iptables/nftables/DOCKER-USER, drift is auto-detected: change `LOG_LIMIT` and run `update-blocklist.sh` to update the rules. For **ufw** (via `/etc/ufw/before.rules`) and **firewalld** (via `--direct`), changing the value requires `./uninstall.sh --apply` then re-running `update-blocklist.sh`.
+For iptables/nftables/DOCKER-USER, drift is auto-detected: change `LOG_LIMIT` and run `update-blocklist.sh` to update the rules. For **ufw** (via `/etc/ufw/before.rules`) and **firewalld INPUT** (via `--direct`), changing the value requires `./uninstall.sh --apply` then re-running `update-blocklist.sh`.
 
 Rules applied by `update-blocklist.sh` all use the `BLOCKED: ` prefix in their logs, regardless of the firewall:
 
@@ -707,6 +709,8 @@ Sur un hôte Docker, le trafic destiné aux conteneurs (ports publiés via `-p` 
 
 Le script détecte automatiquement la présence de Docker via la chaîne `DOCKER-USER` dans iptables. Quand elle existe, les mêmes règles LOG + DROP sont appliquées sur `DOCKER-USER` en plus de `INPUT`, **scopées à l'interface WAN** (`-i $WAN_INTERFACE`) pour ne filtrer que le trafic **entrant** depuis Internet vers les conteneurs. Le trafic sortant des conteneurs (qui passe par `IN=br-xxx`) n'est jamais filtré, conformément au principe "filtrer uniquement l'entrée".
 
+Avec **firewalld**, les règles `INPUT` restent gérées par des règles directes permanentes, mais les règles Docker `DOCKER-USER` sont appliquées au runtime via iptables uniquement. Elles ne sont volontairement pas stockées en règles directes permanentes firewalld, car firewalld peut échouer au démarrage ou au reload si Docker n'a pas encore créé `DOCKER-USER`. Si une ancienne version d'ipshield a laissé ce type de règle permanente, le prochain `update-blocklist.sh` les supprime avant d'appliquer les règles Docker runtime.
+
 Les règles blocklist sont aussi limitées à `conntrack --ctstate NEW`. Pour TCP, cela bloque les connexions entrantes normales au démarrage de la connexion (chemin SYN), tandis que les réponses à des connexions sortantes déjà suivies comme `ESTABLISHED` ne sont pas supprimées seulement parce que l'IP distante figure dans une liste publique.
 
 **Auto-détection de l'interface WAN** : par défaut, le script détecte l'interface via `ip route get 8.8.8.8`. Si l'auto-détection donne le mauvais résultat (cas VPN/multi-homed), définir `WAN_INTERFACE="ens160"` dans `/etc/update-blocklist.conf`.
@@ -792,7 +796,7 @@ Pour ajuster :
 - `LOG_LIMIT=""` (vide) : pas de rate-limit, loggue **tout** (risque réel sous attaque)
 - voir `update-blocklist.conf.example` pour les détails
 
-Pour iptables/nftables/DOCKER-USER, le drift est détecté automatiquement : changer `LOG_LIMIT` et lancer `update-blocklist.sh` met à jour les règles. Pour **ufw** (via `/etc/ufw/before.rules`) et **firewalld** (via `--direct`), un changement de valeur nécessite `./uninstall.sh --apply` puis ré-exécution de `update-blocklist.sh`.
+Pour iptables/nftables/DOCKER-USER, le drift est détecté automatiquement : changer `LOG_LIMIT` et lancer `update-blocklist.sh` met à jour les règles. Pour **ufw** (via `/etc/ufw/before.rules`) et **firewalld INPUT** (via `--direct`), un changement de valeur nécessite `./uninstall.sh --apply` puis ré-exécution de `update-blocklist.sh`.
 
 Les règles appliquées par `update-blocklist.sh` utilisent toutes le préfixe `BLOCKED: ` dans leurs logs, quel que soit le firewall :
 

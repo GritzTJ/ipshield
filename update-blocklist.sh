@@ -247,7 +247,7 @@ detect_firewall() {
     return
   fi
 
-  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)" && iptables_input_rules_present; then
+  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)"; then
     echo "iptables"
     return
   fi
@@ -275,6 +275,16 @@ detect_firewall() {
 # --- Docker detection (DOCKER-USER chain) ---
 detect_docker() {
   iptables -L DOCKER-USER -n >/dev/null 2>&1
+}
+
+docker_iptables_chains_present() {
+  local bin
+  for bin in iptables iptables-nft iptables-legacy; do
+    command -v "$bin" >/dev/null 2>&1 || continue
+    "$bin" -t nat -S DOCKER >/dev/null 2>&1 && return 0
+    "$bin" -S DOCKER-USER >/dev/null 2>&1 && return 0
+  done
+  return 1
 }
 
 require_iptables_nft_backend() {
@@ -309,18 +319,77 @@ _remove_matching_rules() {
   done
 }
 
+_firewalld_get_all_direct_rules() {
+  if command -v firewall-cmd >/dev/null 2>&1; then
+    firewall-cmd --permanent --direct --get-all-rules 2>/dev/null && return 0
+  fi
+  if command -v firewall-offline-cmd >/dev/null 2>&1; then
+    firewall-offline-cmd --direct --get-all-rules 2>/dev/null && return 0
+  fi
+  return 1
+}
+
+_firewalld_parse_direct_rule_line() {
+  local line="$1"
+  local placeholder="__IPSHIELD_BLOCKED_PREFIX__"
+  local i
+
+  FIREWALLD_DIRECT_RULE_ARGS=()
+  line="${line//--log-prefix 'BLOCKED: '/--log-prefix $placeholder }"
+  line="${line//--log-prefix \"BLOCKED: \"/--log-prefix $placeholder }"
+  read -r -a FIREWALLD_DIRECT_RULE_ARGS <<< "$line"
+
+  for i in "${!FIREWALLD_DIRECT_RULE_ARGS[@]}"; do
+    if [ "${FIREWALLD_DIRECT_RULE_ARGS[$i]}" = "$placeholder" ]; then
+      FIREWALLD_DIRECT_RULE_ARGS[i]="BLOCKED: "
+    fi
+  done
+}
+
+_firewalld_remove_direct_rule() {
+  if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --permanent --direct --remove-rule "$@" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v firewall-offline-cmd >/dev/null 2>&1 && firewall-offline-cmd --direct --remove-rule "$@" >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
 _remove_firewalld_block_rules() {
   local chain="$1"
   local line
-  local rule_args
   while true; do
-    line="$(firewall-cmd --permanent --direct --get-all-rules 2>/dev/null \
+    line="$(_firewalld_get_all_direct_rules \
       | grep -E "^ipv4 filter $chain .*--match-set $SET_NAME src.*-j (LOG|DROP)" \
       | head -1 || true)"
     [ -z "$line" ] && break
-    read -r -a rule_args <<< "$line"
-    firewall-cmd --permanent --direct --remove-rule "${rule_args[@]}" >/dev/null
+    _firewalld_parse_direct_rule_line "$line"
+    if ! _firewalld_remove_direct_rule "${FIREWALLD_DIRECT_RULE_ARGS[@]}"; then
+      err "Warning: cannot remove firewalld direct rule: $line"
+      return 1
+    fi
   done
+}
+
+_remove_firewalld_set_rules() {
+  local chain="$1"
+  local set="$2"
+  local line
+  local removed=1
+  while true; do
+    line="$(_firewalld_get_all_direct_rules \
+      | grep -E "^ipv4 filter $chain .*--match-set $set src" \
+      | head -1 || true)"
+    [ -z "$line" ] && break
+    _firewalld_parse_direct_rule_line "$line"
+    if ! _firewalld_remove_direct_rule "${FIREWALLD_DIRECT_RULE_ARGS[@]}"; then
+      err "Warning: cannot remove firewalld direct rule: $line"
+      return 1
+    fi
+    removed=0
+  done
+  return "$removed"
 }
 
 # --- ufw before.rules hygiene ---
@@ -527,12 +596,12 @@ _whitelist_or_cleanup_firewalld() {
   [ -n "$iface" ] && iface_args=( -i "$iface" )
   if [ "${#WHITELIST[@]}" -gt 0 ]; then
     if ! firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT >/dev/null 2>/dev/null; then
+      _remove_firewalld_set_rules "$chain" "$WHITELIST_SET_NAME" || true
       firewall-cmd --permanent --direct --add-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT >/dev/null
       return 0
     fi
   else
-    if firewall-cmd --permanent --direct --query-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT >/dev/null 2>/dev/null; then
-      firewall-cmd --permanent --direct --remove-rule ipv4 filter "$chain" 0 "${iface_args[@]}" -m set --match-set "$WHITELIST_SET_NAME" src -j ACCEPT >/dev/null
+    if _remove_firewalld_set_rules "$chain" "$WHITELIST_SET_NAME"; then
       return 0
     fi
   fi
@@ -599,27 +668,19 @@ apply_firewall_rules() {
         log "firewalld rules added (LOG + DROP)."
       fi
       _whitelist_or_cleanup_firewalld INPUT && need_reload=1
-      if detect_docker; then
-        # DOCKER-USER: add -i WAN_INTERFACE if defined (inbound filter only)
-        local docker_iface_args=()
-        [ -n "$WAN_INTERFACE" ] && docker_iface_args=( -i "$WAN_INTERFACE" )
-        local docker_state_args=( -m conntrack --ctstate NEW )
-        local docker_log_args=( "${docker_iface_args[@]}" "${docker_state_args[@]}" -m set --match-set "$SET_NAME" src )
-        if [ -n "$LOG_LIMIT" ]; then
-          docker_log_args+=( -m limit --limit "$LOG_LIMIT" --limit-burst "$LOG_BURST" )
-        fi
-        docker_log_args+=( -j LOG --log-prefix "BLOCKED: " --log-level 4 )
-        if ! firewall-cmd --permanent --direct --query-rule ipv4 filter DOCKER-USER 1 "${docker_iface_args[@]}" "${docker_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP >/dev/null 2>/dev/null; then
-          _remove_firewalld_block_rules DOCKER-USER
-          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 0 "${docker_log_args[@]}" >/dev/null
-          firewall-cmd --permanent --direct --add-rule ipv4 filter DOCKER-USER 1 "${docker_iface_args[@]}" "${docker_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP >/dev/null
-          need_reload=1
-          log "firewalld DOCKER-USER rules added (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
-        fi
-        _whitelist_or_cleanup_firewalld DOCKER-USER "$WAN_INTERFACE" && need_reload=1
-        docker_protected=1
-      fi
+      # Docker chains are runtime objects owned by Docker. Do not keep
+      # firewalld permanent direct rules pointing at DOCKER-USER: they can break
+      # firewalld reload/start when Docker has not created the chain yet.
+      if _remove_firewalld_set_rules DOCKER-USER "$SET_NAME"; then need_reload=1; fi
+      if _remove_firewalld_set_rules DOCKER-USER "$WHITELIST_SET_NAME"; then need_reload=1; fi
       [ "$need_reload" -eq 1 ] && firewall-cmd --reload >/dev/null
+      if detect_docker; then
+        _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "firewalld Docker rules added via iptables DOCKER-USER (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
+        _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
+        docker_protected=1
+      elif docker_iptables_chains_present; then
+        err "Warning: Docker chains exist outside the current iptables backend; DOCKER-USER was not modified."
+      fi
       ;;
 
     ufw)

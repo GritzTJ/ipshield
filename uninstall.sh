@@ -164,7 +164,7 @@ detect_firewall() {
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qE "^Status: active$"; then
     echo "ufw"; return
   fi
-  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)" && iptables_input_rules_present; then
+  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)"; then
     echo "iptables"; return
   fi
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nftables 2>/dev/null; then
@@ -183,6 +183,16 @@ detect_firewall() {
 
 detect_docker() {
   iptables -L DOCKER-USER -n >/dev/null 2>&1
+}
+
+docker_iptables_chains_present() {
+  local bin
+  for bin in iptables iptables-nft iptables-legacy; do
+    command -v "$bin" >/dev/null 2>&1 || continue
+    "$bin" -t nat -S DOCKER >/dev/null 2>&1 && return 0
+    "$bin" -S DOCKER-USER >/dev/null 2>&1 && return 0
+  done
+  return 1
 }
 
 # --- iptables removal (idempotent, removes all occurrences) ---
@@ -215,18 +225,57 @@ remove_iptables_rules() {
 }
 
 # --- firewalld --direct removal (generic: matches any limit values) ---
+firewalld_get_all_direct_rules() {
+  if command -v firewall-cmd >/dev/null 2>&1; then
+    firewall-cmd --permanent --direct --get-all-rules 2>/dev/null && return 0
+  fi
+  if command -v firewall-offline-cmd >/dev/null 2>&1; then
+    firewall-offline-cmd --direct --get-all-rules 2>/dev/null && return 0
+  fi
+  return 1
+}
+
+firewalld_parse_direct_rule_line() {
+  local line="$1"
+  local placeholder="__IPSHIELD_BLOCKED_PREFIX__"
+  local i
+
+  FIREWALLD_DIRECT_RULE_ARGS=()
+  line="${line//--log-prefix 'BLOCKED: '/--log-prefix $placeholder }"
+  line="${line//--log-prefix \"BLOCKED: \"/--log-prefix $placeholder }"
+  read -r -a FIREWALLD_DIRECT_RULE_ARGS <<< "$line"
+
+  for i in "${!FIREWALLD_DIRECT_RULE_ARGS[@]}"; do
+    if [ "${FIREWALLD_DIRECT_RULE_ARGS[$i]}" = "$placeholder" ]; then
+      FIREWALLD_DIRECT_RULE_ARGS[i]="BLOCKED: "
+    fi
+  done
+}
+
+firewalld_remove_direct_rule() {
+  if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --permanent --direct --remove-rule "$@" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v firewall-offline-cmd >/dev/null 2>&1 && firewall-offline-cmd --direct --remove-rule "$@" >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
 remove_firewalld_rules() {
   local chain="$1"
   local changed=0
   local line
-  local rule_args
   while true; do
-    line="$(firewall-cmd --permanent --direct --get-all-rules 2>/dev/null \
+    line="$(firewalld_get_all_direct_rules \
       | grep -E "^ipv4 filter $chain .*--match-set ($SET_NAME|$WHITELIST_SET_NAME) src" \
       | head -1 || true)"
     [ -z "$line" ] && break
-    read -r -a rule_args <<< "$line"
-    firewall-cmd --permanent --direct --remove-rule "${rule_args[@]}" >/dev/null
+    firewalld_parse_direct_rule_line "$line"
+    if ! firewalld_remove_direct_rule "${FIREWALLD_DIRECT_RULE_ARGS[@]}"; then
+      err "Warning: cannot remove firewalld direct rule: $line"
+      return 1
+    fi
     changed=1
   done
   [ "$changed" -eq 1 ] && return 0 || return 1
@@ -246,6 +295,8 @@ DOCKER_PRESENT=0
 if command -v iptables >/dev/null 2>&1 && detect_docker; then
   DOCKER_PRESENT=1
   log "Docker detected: the DOCKER-USER chain will also be cleaned."
+elif docker_iptables_chains_present; then
+  log "Docker chains detected outside the current iptables backend; only current-backend ipshield rules can be cleaned."
 fi
 
 echo ""
@@ -281,7 +332,7 @@ case "$FW" in
     fi
     ;;
   firewalld)
-    fw_rules="$(firewall-cmd --permanent --direct --get-all-rules 2>/dev/null | grep -E "match-set ($SET_NAME|$WHITELIST_SET_NAME) src" || true)"
+    fw_rules="$(firewalld_get_all_direct_rules | grep -E "match-set ($SET_NAME|$WHITELIST_SET_NAME) src" || true)"
     if [ -n "$fw_rules" ]; then
       echo "$fw_rules" | awk '{print "    " $0}'
     else
@@ -409,9 +460,7 @@ case "$FW" in
   firewalld)
     need_reload=0
     if remove_firewalld_rules INPUT; then need_reload=1; fi
-    if [ "$DOCKER_PRESENT" -eq 1 ] && remove_firewalld_rules DOCKER-USER; then
-      need_reload=1
-    fi
+    if remove_firewalld_rules DOCKER-USER; then need_reload=1; fi
     [ "$need_reload" -eq 1 ] && firewall-cmd --reload >/dev/null
     ;;
   ufw)

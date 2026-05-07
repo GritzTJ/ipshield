@@ -76,6 +76,21 @@ else
 fi
 
 # --- Active firewall detection ---
+iptables_input_rules_present() {
+  command -v iptables >/dev/null 2>&1 || return 1
+  iptables -S INPUT 2>/dev/null | awk '$1 == "-A" { found=1 } END { exit(found ? 0 : 1) }'
+}
+
+docker_iptables_chains_present() {
+  command -v iptables >/dev/null 2>&1 || return 1
+  iptables -t nat -S DOCKER >/dev/null 2>&1 || iptables -S DOCKER-USER >/dev/null 2>&1
+}
+
+nft_input_hook_present() {
+  command -v nft >/dev/null 2>&1 || return 1
+  nft list ruleset 2>/dev/null | grep -q "hook input"
+}
+
 detect_firewall() {
   if systemctl is-active --quiet firewalld 2>/dev/null; then
     echo "firewalld"
@@ -88,7 +103,7 @@ detect_firewall() {
     return
   fi
 
-  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)"; then
+  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)" && iptables_input_rules_present; then
     echo "iptables"
     return
   fi
@@ -97,12 +112,12 @@ detect_firewall() {
     echo "nftables"
     return
   fi
-  if command -v nft >/dev/null 2>&1 && nft list ruleset 2>/dev/null | grep -q .; then
+  if nft_input_hook_present; then
     echo "nftables"
     return
   fi
 
-  if command -v iptables >/dev/null 2>&1 && iptables -L -n 2>/dev/null | grep -q "^Chain"; then
+  if iptables_input_rules_present; then
     # Skip leftover ufw chains if ufw is installed but inactive
     if ! command -v ufw >/dev/null 2>&1 || ! iptables -L -n 2>/dev/null | grep -q "^Chain ufw-"; then
       echo "iptables"
@@ -698,6 +713,12 @@ if [ "$DETECTED" != "none" ]; then
       systemctl disable nftables
       ;;
     iptables)
+      if docker_iptables_chains_present; then
+        err "Docker-managed iptables chains detected."
+        err "Refusing to flush iptables tables because this can break Docker published ports."
+        err "Stop Docker and rerun setup during a maintenance window, or keep the existing firewall transition-free."
+        exit 1
+      fi
       # Backup rules before flush (for rollback on failure)
       IPTABLES_BACKUP="$(mktemp)"
       iptables-save > "$IPTABLES_BACKUP"

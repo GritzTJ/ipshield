@@ -30,7 +30,11 @@ grep -Eq 'iptables -V .*grep -q "\(legacy\)"; then' uninstall.sh \
   || fail "uninstall.sh must detect iptables legacy even when INPUT has no rules"
 ok "uninstall.sh detects empty iptables-legacy firewall"
 
-if grep -Eq 'iptables -V .*grep -q "\(legacy\)".*&& iptables_input_rules_present' update-blocklist.sh uninstall.sh; then
+grep -Eq 'iptables -V .*grep -q "\(legacy\)"; then' setup-firewall.sh \
+  || fail "setup-firewall.sh must detect iptables legacy even when INPUT has no rules"
+ok "setup-firewall.sh detects empty iptables-legacy firewall"
+
+if grep -Eq 'iptables -V .*grep -q "\(legacy\)".*&& iptables_input_rules_present' update-blocklist.sh uninstall.sh setup-firewall.sh; then
   fail "iptables legacy detection is still tied to INPUT rule presence"
 fi
 ok "iptables legacy detection is not tied to INPUT rules"
@@ -70,6 +74,31 @@ ok "uninstall.sh warns on hidden Docker chains"
 grep -q 'if remove_firewalld_rules DOCKER-USER; then need_reload=1; fi' uninstall.sh \
   || fail "uninstall.sh must remove stale firewalld DOCKER-USER rules even when Docker is stopped"
 ok "uninstall.sh removes stale firewalld DOCKER-USER rules without Docker"
+
+grep -q ': "${LOG_LIMIT=60/min}"' update-blocklist.sh \
+  || fail "update-blocklist.sh must default LOG_LIMIT when omitted from config"
+grep -q ': "${LOG_BURST=100}"' update-blocklist.sh \
+  || fail "update-blocklist.sh must default LOG_BURST when omitted from config"
+ok "LOG_LIMIT/LOG_BURST defaults are explicit"
+
+grep -q 'grep -oE -- "--match-set \[\^ \]+ src"' update-blocklist.sh \
+  || fail "ufw preflight must detect rules with conntrack before --match-set"
+grep -Fq 'sed -i "\\|^-A ufw-before-input .*--match-set $ref_set src |d"' update-blocklist.sh \
+  || fail "ufw preflight cleanup must remove generic ufw-before-input match-set rules"
+ok "ufw preflight handles conntrack-prefixed rules"
+
+grep -q '_firewalld_reload_or_restart' update-blocklist.sh \
+  || fail "update-blocklist.sh must recover firewalld after offline direct-rule cleanup"
+docker_cleanup_line="$(grep -n '_remove_firewalld_set_rules DOCKER-USER "$SET_NAME"' update-blocklist.sh | head -1 | cut -d: -f1)"
+input_query_line="$(grep -n 'query-rule ipv4 filter INPUT 1' update-blocklist.sh | head -1 | cut -d: -f1)"
+if [ -z "$docker_cleanup_line" ] || [ -z "$input_query_line" ] || [ "$docker_cleanup_line" -ge "$input_query_line" ]; then
+  fail "firewalld stale DOCKER-USER cleanup must run before INPUT direct-rule queries"
+fi
+ok "firewalld stale DOCKER-USER cleanup runs before INPUT changes"
+
+grep -q 'validate_root_config_file "$conf_path" || return 1' setup-firewall.sh \
+  || fail "setup-firewall.sh must validate /etc/update-blocklist.conf before sourcing"
+ok "setup-firewall.sh validates config before sourcing"
 
 echo
 echo "OK $PASS static regression checks"

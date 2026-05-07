@@ -117,7 +117,7 @@ detect_firewall() {
     return
   fi
 
-  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)" && iptables_input_rules_present; then
+  if command -v iptables >/dev/null 2>&1 && iptables -V 2>/dev/null | grep -q "(legacy)"; then
     echo "iptables"
     return
   fi
@@ -284,6 +284,23 @@ _install_config() {
   return 0
 }
 
+validate_root_config_file() {
+  local path="$1"
+  local conf_owner conf_perms
+
+  [ -f "$path" ] || return 0
+  conf_owner="$(stat -c '%u' "$path")"
+  conf_perms="$(stat -c '%a' "$path")"
+  if [ "$conf_owner" != "0" ]; then
+    err "$path is not owned by root (uid=$conf_owner). Security risk."
+    return 1
+  fi
+  if [[ "$conf_perms" =~ [2367][0-9]$ ]] || [[ "$conf_perms" =~ [0-9][2367]$ ]]; then
+    err "$path is group/world-writable (perms=$conf_perms). Security risk."
+    return 1
+  fi
+}
+
 # --- Configuration file installation ---
 # /etc/update-blocklist.conf is required by update-blocklist.sh. Copied from
 # update-blocklist.conf.example when missing. If present, kept as-is to
@@ -321,6 +338,7 @@ configure_ipset_restore() {
   local save_file="/var/lib/ipshield/ipset.save"
 
   if [ -f "$conf_path" ]; then
+    validate_root_config_file "$conf_path" || return 1
     # shellcheck source=/dev/null
     . "$conf_path"
     persist="${PERSIST_IPSET:-1}"

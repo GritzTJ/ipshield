@@ -143,6 +143,8 @@ fi
 
 # --- LOG_LIMIT / LOG_BURST validation ---
 # Empty LOG_LIMIT = log everything (no rate-limit)
+: "${LOG_LIMIT=60/min}"
+: "${LOG_BURST=100}"
 if [ -n "$LOG_LIMIT" ]; then
   if ! [[ "$LOG_LIMIT" =~ ^[0-9]+/(sec|second|min|minute|hour|day)$ ]]; then
     echo "Error: LOG_LIMIT invalid ('$LOG_LIMIT'). Expected format: N/(sec|min|hour|day) or empty." >&2
@@ -356,6 +358,16 @@ _firewalld_remove_direct_rule() {
   return 1
 }
 
+_firewalld_reload_or_restart() {
+  if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl restart firewalld >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
 _remove_firewalld_block_rules() {
   local chain="$1"
   local line
@@ -395,8 +407,8 @@ _remove_firewalld_set_rules() {
 # --- ufw before.rules hygiene ---
 _ufw_referenced_sets() {
   [ -f /etc/ufw/before.rules ] || return 0
-  grep -oE -- "-A ufw-before-input -m set --match-set [^ ]+ src" /etc/ufw/before.rules 2>/dev/null \
-    | awk '{print $6}' \
+  grep -oE -- "--match-set [^ ]+ src" /etc/ufw/before.rules 2>/dev/null \
+    | awk '{print $2}' \
     | sort -u
 }
 
@@ -452,7 +464,7 @@ _ufw_preflight_ipsets() {
     snapshot="${TMP_DIR}/ufw-before.rules.preflight"
     cp /etc/ufw/before.rules "$snapshot"
     for ref_set in "${orphans[@]}"; do
-      sed -i "\\|^-A ufw-before-input -m set --match-set $ref_set src |d" /etc/ufw/before.rules
+      sed -i "\\|^-A ufw-before-input .*--match-set $ref_set src |d" /etc/ufw/before.rules
     done
     log "ufw: removed orphan rule(s) referencing nonexistent or inactive ipset(s): ${orphans[*]}"
     changed=1
@@ -652,6 +664,20 @@ apply_firewall_rules() {
 
     firewalld)
       local need_reload=0
+      # First migrate away stale permanent DOCKER-USER direct rules. If
+      # firewalld is already RUNNING_BUT_FAILED because Docker had not created
+      # DOCKER-USER at boot, INPUT changes below would fail until this cleanup
+      # is applied and firewalld is reloaded/restarted.
+      if _remove_firewalld_set_rules DOCKER-USER "$SET_NAME"; then need_reload=1; fi
+      if _remove_firewalld_set_rules DOCKER-USER "$WHITELIST_SET_NAME"; then need_reload=1; fi
+      if [ "$need_reload" -eq 1 ]; then
+        if ! _firewalld_reload_or_restart; then
+          err "Error: cannot reload/restart firewalld after removing stale DOCKER-USER rules."
+          return 1
+        fi
+        need_reload=0
+      fi
+
       # Build LOG args according to LOG_LIMIT
       local fw_state_args=( -m conntrack --ctstate NEW )
       local fw_log_args=( "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src )
@@ -668,12 +694,10 @@ apply_firewall_rules() {
         log "firewalld rules added (LOG + DROP)."
       fi
       _whitelist_or_cleanup_firewalld INPUT && need_reload=1
-      # Docker chains are runtime objects owned by Docker. Do not keep
-      # firewalld permanent direct rules pointing at DOCKER-USER: they can break
-      # firewalld reload/start when Docker has not created the chain yet.
-      if _remove_firewalld_set_rules DOCKER-USER "$SET_NAME"; then need_reload=1; fi
-      if _remove_firewalld_set_rules DOCKER-USER "$WHITELIST_SET_NAME"; then need_reload=1; fi
-      [ "$need_reload" -eq 1 ] && firewall-cmd --reload >/dev/null
+      if [ "$need_reload" -eq 1 ] && ! _firewalld_reload_or_restart; then
+        err "Error: cannot reload/restart firewalld after updating INPUT rules."
+        return 1
+      fi
       if detect_docker; then
         _apply_iptables_rules DOCKER-USER "$WAN_INTERFACE" && log "firewalld Docker rules added via iptables DOCKER-USER (LOG + DROP, inbound on ${WAN_INTERFACE:-all interfaces})."
         _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"

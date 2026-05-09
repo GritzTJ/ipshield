@@ -293,6 +293,40 @@ nft_input_hook_present() {
   '
 }
 
+ufw_status_active() {
+  command -v ufw >/dev/null 2>&1 || return 1
+  ufw status 2>/dev/null | grep -qE "^Status: active$"
+}
+
+ufw_status_inactive() {
+  command -v ufw >/dev/null 2>&1 || return 1
+  ufw status 2>/dev/null | grep -qE "^Status: inactive$"
+}
+
+ufw_service_active_or_enabled() {
+  systemctl is-active --quiet ufw 2>/dev/null || systemctl is-enabled --quiet ufw 2>/dev/null
+}
+
+offer_disable_inactive_ufw_service() {
+  [ "$FIREWALL" != "ufw" ] || return 0
+  ufw_status_inactive || return 0
+  ufw_service_active_or_enabled || return 0
+
+  echo ""
+  log "UFW status is inactive, but the ufw systemd service is active/enabled."
+  log "UFW is not filtering traffic, but leaving the service active can be confusing"
+  log "when $FIREWALL is the selected firewall."
+  if ask_yes_no "Disable the inactive UFW systemd service now?" yes; then
+    if systemctl disable --now ufw >/dev/null 2>&1; then
+      log "Inactive UFW service disabled."
+    else
+      err "Cannot disable ufw.service automatically. Continuing; check manually with: ufw status verbose"
+    fi
+  else
+    log "Inactive UFW service kept as-is. Verify real UFW state with: ufw status verbose"
+  fi
+}
+
 detect_firewall() {
   if systemctl is-active --quiet firewalld 2>/dev/null; then
     echo "firewalld"
@@ -300,7 +334,7 @@ detect_firewall() {
   fi
 
   # Anchor the match so "Status: inactive" is not treated as "active".
-  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qE "^Status: active$"; then
+  if ufw_status_active; then
     echo "ufw"
     return
   fi
@@ -787,6 +821,8 @@ case "$choice" in
   4) FIREWALL="ufw" ;;
   *) err "invalid choice: $choice"; exit 1 ;;
 esac
+
+offer_disable_inactive_ufw_service
 
 # --- Select iptables backend on systems using update-alternatives ---
 select_iptables_backend() {

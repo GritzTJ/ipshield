@@ -30,6 +30,7 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 - **Four supported firewalls**: iptables, nftables, firewalld, ufw — auto-detected and applied idempotently
 - **Docker-aware**: inbound-only protection of the `DOCKER-USER` chain, scoped to the WAN interface (container egress is never filtered); firewalld systems use runtime `DOCKER-USER` rules so Docker boot ordering cannot break firewalld
 - **Docker-safe setup**: firewall transitions and iptables backend switches offer a guided maintenance path when Docker chains are present, while recommending a clean application/Compose shutdown first if containers are running
+- **UFW-aware setup**: when another firewall is selected, inactive UFW rules with an active/enabled `ufw.service` are detected and can be disabled to avoid ambiguous post-install checks
 - **Whitelist** of trusted IPs/subnets (management, jump hosts) with prefix-width safeguard against accidental `0.0.0.0/0`
 - **Zero-downtime updates** via atomic ipset swap
 - **Boot-safe ipset persistence** for persistent firewalls (`ufw`, `firewalld`, `nftables`)
@@ -154,6 +155,7 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 - **Quatre firewalls supportés** : iptables, nftables, firewalld, ufw — détection automatique et application idempotente des règles
 - **Compatible Docker** : protection de la chaîne `DOCKER-USER` en entrée uniquement, scopée à l'interface WAN (l'egress des conteneurs n'est jamais filtré) ; avec firewalld, les règles `DOCKER-USER` restent runtime pour ne pas casser firewalld au boot si Docker n'a pas encore créé la chaîne
 - **Setup compatible Docker** : les transitions firewall et changements de backend iptables proposent un chemin de maintenance guidé lorsque des chaînes Docker sont présentes, en recommandant d'abord un arrêt propre applicatif/Compose si des conteneurs tournent
+- **Setup conscient d'UFW** : lorsqu'un autre firewall est sélectionné, un `ufw.service` actif/enabled avec des règles UFW inactives est détecté et peut être désactivé pour éviter les vérifications ambiguës après installation
 - **Whitelist** d'IP/subnets de confiance (management, bastions) avec garde-fou de préfixe pour empêcher un `0.0.0.0/0` accidentel
 - **Mise à jour sans interruption** par swap atomique d'ipset
 - **Persistance ipset au boot** pour les firewalls persistants (`ufw`, `firewalld`, `nftables`)

@@ -119,6 +119,8 @@ Backend selection details:
 
 Docker safety: if Docker iptables chains are present, `setup-firewall.sh` does not blindly modify the firewall. It offers a guided maintenance path: stop Docker, clean Docker-owned iptables/nft compatibility chains, continue the firewall transition or backend switch, then restart Docker. If containers are running, the prompt defaults to `no` because published ports and containers may be interrupted. In production, prefer stopping application stacks cleanly first (for example `docker compose down`), then rerun `setup-firewall.sh`; stopping the Docker daemon is not equivalent to a clean Compose/application shutdown. If Docker is active but no containers are running, the prompt defaults to `yes`.
 
+Ubuntu UFW note: `ufw.service` can be active/enabled even when `ufw status` is `inactive`. In that state UFW is not filtering traffic, but the service state is confusing when another firewall is selected. If `setup-firewall.sh` detects this while installing another firewall, it offers to run `systemctl disable --now ufw`.
+
 #### Step 2: Run the blocker (first execution)
 
 Test in simulation mode:
@@ -592,6 +594,8 @@ Détails de sélection du backend :
 - Le choix **nftables** sélectionne `iptables-nft`/`ip6tables-nft` via `update-alternatives` quand ces binaires sont disponibles, car le projet applique les règles du chemin nftables via iptables-nft afin de conserver le support du match ipset.
 
 Sécurité Docker : si des chaînes iptables Docker sont présentes, `setup-firewall.sh` ne modifie pas le firewall à l'aveugle. Il propose un chemin de maintenance guidé : arrêter Docker, nettoyer les chaînes iptables/nft compatibility appartenant à Docker, continuer la transition firewall ou le changement de backend, puis redémarrer Docker. Si des conteneurs tournent, le prompt propose `no` par défaut car les ports publiés et les conteneurs peuvent être interrompus. En production, préférer arrêter proprement les stacks applicatives d'abord (par exemple `docker compose down`), puis relancer `setup-firewall.sh` ; arrêter le daemon Docker n'est pas équivalent à un arrêt propre Compose/applicatif. Si Docker est actif sans conteneur, le prompt propose `yes` par défaut.
+
+Note UFW Ubuntu : `ufw.service` peut être actif/enabled même lorsque `ufw status` vaut `inactive`. Dans cet état, UFW ne filtre pas le trafic, mais l'état du service peut prêter à confusion lorsqu'un autre firewall est sélectionné. Si `setup-firewall.sh` détecte ce cas pendant l'installation d'un autre firewall, il propose d'exécuter `systemctl disable --now ufw`.
 
 #### Étape 2 : Lancer le blocage (première exécution)
 

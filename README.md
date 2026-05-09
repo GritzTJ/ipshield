@@ -111,6 +111,7 @@ update-blocklist.sh [OPTIONS]
 | `setup-firewall.sh` | Interactive firewall installation (one-shot) |
 | `lookup-ip.sh` | Look up an IP across blocklist sources (diagnostic) |
 | `uninstall.sh` | Clean uninstall (dry-run by default, `--apply` to execute) |
+| `ipshield-parse.awk` | Shared IPv4/CIDR parser used by update and lookup scripts |
 
 ### Blocklist Sources
 
@@ -235,6 +236,7 @@ update-blocklist.sh [OPTIONS]
 | `setup-firewall.sh` | Installation interactive d'un firewall (one-shot) |
 | `lookup-ip.sh` | Recherche d'une IP dans les listes de blocage (diagnostic) |
 | `uninstall.sh` | Désinstallation propre (dry-run par défaut, `--apply` pour exécuter) |
+| `ipshield-parse.awk` | Parseur IPv4/CIDR partagé par les scripts update et lookup |
 
 ### Sources de blocage
 

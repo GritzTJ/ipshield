@@ -43,7 +43,6 @@ chmod 700 *.sh
 ### Configuration
 
 `/etc/update-blocklist.conf` is **required** by `update-blocklist.sh` and `lookup-ip.sh`. It is the **single source of truth** for URLs and defaults.
-Keep `ipshield-parse.awk` in the same directory as `update-blocklist.sh` and `lookup-ip.sh`; both scripts use it for IPv4/CIDR parsing.
 
 `setup-firewall.sh` automatically copies `update-blocklist.conf.example` to `/etc/update-blocklist.conf` (chmod 600, owner root) during installation. Manual install if needed:
 
@@ -518,7 +517,6 @@ chmod 700 *.sh
 ### Configuration
 
 `/etc/update-blocklist.conf` est **requis** par `update-blocklist.sh` et `lookup-ip.sh`. C'est la **source de vérité unique** pour les URLs et les défauts.
-Conserver `ipshield-parse.awk` dans le même répertoire que `update-blocklist.sh` et `lookup-ip.sh` ; les deux scripts l'utilisent pour parser IPv4/CIDR.
 
 `setup-firewall.sh` copie automatiquement `update-blocklist.conf.example` vers `/etc/update-blocklist.conf` (chmod 600, owner root) lors de l'installation. En cas de besoin manuel :
 

@@ -235,6 +235,11 @@ prepare_docker_firewall_transition() {
     if [ "$running_count" -gt 0 ] && command -v docker >/dev/null 2>&1; then
       log "Running containers:"
       docker ps --format '  - {{.Names}} ({{.Status}})' 2>/dev/null | sed -n '1,20p' || true
+      log ""
+      log "Preferred production path: stop application containers cleanly first"
+      log "(for example: docker compose down), then rerun setup-firewall.sh."
+      log "Letting this setup stop Docker only stops the Docker daemon; it is not"
+      log "equivalent to a clean application/Compose shutdown."
     fi
 
     live_restore="false"
@@ -247,7 +252,7 @@ prepare_docker_firewall_transition() {
       exit 1
     fi
 
-    if ! ask_yes_no "Stop Docker, clean Docker firewall chains, continue setup, then restart Docker? This may interrupt containers and published ports." "$default_answer"; then
+    if ! ask_yes_no "Stop Docker daemon, clean Docker firewall chains, continue setup, then restart Docker? Prefer stopping containers cleanly first when any are running." "$default_answer"; then
       err "Docker firewall preparation declined. Aborting without firewall changes."
       exit 1
     fi

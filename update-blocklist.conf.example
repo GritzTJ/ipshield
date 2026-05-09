@@ -24,12 +24,13 @@ URLS=(
 )
 
 # --- ipset blacklist name ---
-# Allowed characters: [a-zA-Z0-9_-]
+# Allowed characters: [a-zA-Z0-9_-], maximum length: 31 characters.
 SET_NAME="blacklist"
 
 # --- ipset whitelist name ---
 # Default: "${SET_NAME}-allow" (e.g. "blacklist-allow").
-# Allowed characters: [a-zA-Z0-9_-], must differ from SET_NAME.
+# Allowed characters: [a-zA-Z0-9_-], maximum length: 31 characters,
+# must differ from SET_NAME.
 WHITELIST_SET_NAME="${SET_NAME}-allow"
 
 # --- Whitelist: always-allowed IPs or subnets (bypass blocklist + entire firewall) ---
@@ -101,3 +102,8 @@ WAN_INTERFACE=""
 # reload/start fail.
 PERSIST_IPSET=1
 IPSET_SAVE_FILE="/var/lib/ipshield/ipset.save"
+
+# --- lookup-ip.sh cache ---
+# TTL in seconds for downloaded source cache used by lookup-ip.sh.
+# Default: 21600 seconds (6 hours). Set to 0 to disable cache.
+LOOKUP_CACHE_TTL=21600

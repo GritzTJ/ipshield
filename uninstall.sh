@@ -81,9 +81,17 @@ if [[ ! "$SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
   echo "Error: SET_NAME invalid ('$SET_NAME')." >&2
   exit 1
 fi
+if [ "${#SET_NAME}" -gt 31 ]; then
+  echo "Error: SET_NAME too long (${#SET_NAME} > 31)." >&2
+  exit 1
+fi
 : "${WHITELIST_SET_NAME:=${SET_NAME}-allow}"
 if [[ ! "$WHITELIST_SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
   echo "Error: WHITELIST_SET_NAME invalid ('$WHITELIST_SET_NAME')." >&2
+  exit 1
+fi
+if [ "${#WHITELIST_SET_NAME}" -gt 31 ]; then
+  echo "Error: WHITELIST_SET_NAME too long (${#WHITELIST_SET_NAME} > 31)." >&2
   exit 1
 fi
 : "${PERSIST_IPSET:=1}"
@@ -274,6 +282,7 @@ remove_firewalld_rules() {
     firewalld_parse_direct_rule_line "$line"
     if ! firewalld_remove_direct_rule "${FIREWALLD_DIRECT_RULE_ARGS[@]}"; then
       err "Warning: cannot remove firewalld direct rule: $line"
+      [ "$changed" -eq 1 ] && return 0
       return 1
     fi
     changed=1
@@ -465,7 +474,7 @@ case "$FW" in
     ;;
   ufw)
     # Remove ipshield rules from before.rules line-by-line (more robust than
-    # restoring before.rules.bak, which can be stale: it may reference sets
+    # restoring a generic backup, which can be stale: it may reference sets
     # that have since been destroyed -- e.g. blacklist-allow after a previous
     # WHITELIST=() run -- making "ufw reload" fail with "Set X doesn't exist"
     # and leaving the firewall in a partial state).
@@ -486,7 +495,7 @@ case "$FW" in
 
       if [ "${#sets_to_remove[@]}" -gt 0 ]; then
         # Snapshot for rollback if ufw reload fails.
-        snapshot=/etc/ufw/before.rules.uninstall.snapshot
+        snapshot=/etc/ufw/before.rules.ipshield.uninstall.snapshot
         cp /etc/ufw/before.rules "$snapshot"
         for ref_set in "${sets_to_remove[@]}"; do
           sed -i "\\|^-A ufw-before-input .*--match-set $ref_set src |d" /etc/ufw/before.rules

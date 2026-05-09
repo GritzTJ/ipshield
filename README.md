@@ -29,11 +29,12 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 - **RFC 6890 bogon filter**: rejects RFC1918, loopback, link-local, multicast and other reserved ranges from upstream sources to prevent self-blocking the LAN or Docker bridge
 - **Four supported firewalls**: iptables, nftables, firewalld, ufw — auto-detected and applied idempotently
 - **Docker-aware**: inbound-only protection of the `DOCKER-USER` chain, scoped to the WAN interface (container egress is never filtered); firewalld systems use runtime `DOCKER-USER` rules so Docker boot ordering cannot break firewalld
-- **Docker-safe setup**: firewall transitions and iptables backend switches are refused while Docker-managed chains are present
+- **Docker-safe setup**: firewall transitions and iptables backend switches are refused while Docker chains are present, including stale chains left after stopping Docker
 - **Whitelist** of trusted IPs/subnets (management, jump hosts) with prefix-width safeguard against accidental `0.0.0.0/0`
 - **Zero-downtime updates** via atomic ipset swap
 - **Boot-safe ipset persistence** for persistent firewalls (`ufw`, `firewalld`, `nftables`)
 - **Guided setup**: `setup-firewall.sh` installs the firewall, configures the cron, drops the rsyslog filter and logrotate configs
+- **Cached lookup helper**: `lookup-ip.sh` can identify which source lists an IP without re-downloading every source on each call
 - **Clean uninstall** with dry-run preview and confirmation
 - **Single configuration file** (`/etc/update-blocklist.conf`) drives everything; no defaults hard-coded in scripts
 
@@ -152,11 +153,12 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 - **Filtre des bogons RFC 6890** : rejette RFC1918, loopback, link-local, multicast et autres plages réservées issues des sources externes, afin d'éviter d'auto-bloquer le LAN ou le bridge Docker
 - **Quatre firewalls supportés** : iptables, nftables, firewalld, ufw — détection automatique et application idempotente des règles
 - **Compatible Docker** : protection de la chaîne `DOCKER-USER` en entrée uniquement, scopée à l'interface WAN (l'egress des conteneurs n'est jamais filtré) ; avec firewalld, les règles `DOCKER-USER` restent runtime pour ne pas casser firewalld au boot si Docker n'a pas encore créé la chaîne
-- **Setup compatible Docker** : les transitions firewall et changements de backend iptables sont refusés lorsque des chaînes Docker sont présentes
+- **Setup compatible Docker** : les transitions firewall et changements de backend iptables sont refusés lorsque des chaînes Docker sont présentes, y compris des chaînes résiduelles après arrêt de Docker
 - **Whitelist** d'IP/subnets de confiance (management, bastions) avec garde-fou de préfixe pour empêcher un `0.0.0.0/0` accidentel
 - **Mise à jour sans interruption** par swap atomique d'ipset
 - **Persistance ipset au boot** pour les firewalls persistants (`ufw`, `firewalld`, `nftables`)
 - **Installation guidée** : `setup-firewall.sh` installe le firewall, configure le cron, dépose le filtre rsyslog et les configs logrotate
+- **Lookup avec cache** : `lookup-ip.sh` identifie la source qui référence une IP sans retélécharger toutes les listes à chaque appel
 - **Désinstallation propre** avec mode dry-run et confirmation
 - **Fichier de configuration unique** (`/etc/update-blocklist.conf`) qui pilote l'ensemble ; aucun défaut codé en dur dans les scripts
 

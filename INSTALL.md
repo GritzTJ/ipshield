@@ -56,8 +56,8 @@ Variables (all defined with their production-ready values in the example file):
 | Variable | Default | Description |
 |---|---|---|
 | `URLS` | see below | Array of blocklist URLs |
-| `SET_NAME` | `blacklist` | ipset blacklist name |
-| `WHITELIST_SET_NAME` | `${SET_NAME}-allow` | ipset whitelist name |
+| `SET_NAME` | `blacklist` | ipset blacklist name (max 31 chars) |
+| `WHITELIST_SET_NAME` | `${SET_NAME}-allow` | ipset whitelist name (max 31 chars) |
 | `WHITELIST` | `()` (empty) | Array of always-allowed IPv4 addresses/CIDRs (see [Whitelist](#whitelist)) |
 | `WHITELIST_MIN_PREFIX` | `8` | Minimum WHITELIST prefix accepted (rejects /0 to /7 to prevent total bypass via typo). Set to 0 to disable. |
 | `BLOCKLIST_MIN_PREFIX` | `8` | Minimum prefix accepted from external blocklist sources (rejects /0 to /7). Catches a corrupted/malicious source injecting `0.0.0.0/0` which would lock out the whole server. Set to 0 to disable. |
@@ -67,6 +67,7 @@ Variables (all defined with their production-ready values in the example file):
 | `LOG_LIMIT` | `60/min` | Blocked-packet log rate-limit (`N/sec`, `N/min`, `N/hour`, `N/day`; empty = no limit) |
 | `LOG_BURST` | `100` | Maximum burst before `LOG_LIMIT` applies |
 | `WAN_INTERFACE` | `""` (auto) | WAN interface used to scope the DOCKER-USER rule to inbound traffic only. Empty = auto-detected via `ip route get 8.8.8.8`. Set explicitly if auto-detection picks the wrong interface (e.g. VPN). |
+| `LOOKUP_CACHE_TTL` | `21600` | Cache TTL in seconds for `lookup-ip.sh` source downloads (`0` disables cache) |
 
 #### Default sources
 
@@ -101,7 +102,7 @@ These sources are customisable via the `URLS` variable in `/etc/update-blocklist
 The script:
 1. Detects the active firewall (firewalld, ufw, nftables or iptables)
 2. Offers a menu with the 4 options
-3. Auto-detects listening TCP ports (non-loopback) and offers to open them before activation (anti-lockout)
+3. Auto-detects listening TCP/UDP ports (non-loopback) and offers to open them before activation (anti-lockout)
 4. Disables the previous firewall if a different one is chosen (with automatic rollback on failure)
 5. Installs and enables the new firewall
 6. Verifies the firewall responds after activation (otherwise rolls back)
@@ -116,7 +117,7 @@ Backend selection details:
 - Choosing **iptables** selects `iptables-legacy`/`ip6tables-legacy` via `update-alternatives` when those binaries are available.
 - Choosing **nftables** selects `iptables-nft`/`ip6tables-nft` via `update-alternatives` when those binaries are available, because the project applies nftables-path rules through iptables-nft to keep ipset matching support.
 
-Docker safety: if Docker-managed iptables chains are present, `setup-firewall.sh` refuses firewall transitions and iptables backend switches instead of risking deletion or hiding of Docker NAT/filter chains. Run firewall transitions before starting Docker, or stop Docker and perform the transition during a maintenance window.
+Docker safety: if Docker iptables chains are present, `setup-firewall.sh` refuses firewall transitions and iptables backend switches instead of risking deletion or hiding of Docker NAT/filter chains. `systemctl stop docker` can leave those chains behind; run firewall transitions before starting Docker, reboot after stopping Docker, or clean stale Docker chains manually during a maintenance window.
 
 #### Step 2: Run the blocker (first execution)
 
@@ -155,7 +156,7 @@ When an IP appears in the logs (`BLOCKED:`), identify its source:
 ./lookup-ip.sh --verbose 1.2.3.4
 ```
 
-The script downloads the lists on the fly and reports which source(s) reference the IP. Works without root (the ipset check is skipped).
+The script downloads the lists on the fly and reports which source(s) reference the IP. Downloads are cached for `LOOKUP_CACHE_TTL` seconds (default: 6 hours, set `LOOKUP_CACHE_TTL=0` to disable). Works without root (the ipset check is skipped).
 
 ### Whitelist
 
@@ -254,7 +255,7 @@ Blocklist rules are also scoped to `conntrack --ctstate NEW`. For TCP, this mean
 
 - Docker recreates `DOCKER-USER` on each daemon restart — rules do not persist. The cron + `@reboot` automatically reapplies them, and idempotency avoids duplicates.
 - If the script runs at boot before Docker, `DOCKER-USER` does not exist yet — the detection is correctly negative. The next cron run picks it up.
-- `setup-firewall.sh` does not perform firewall transitions or iptables backend switches while Docker-managed iptables chains are present. If Docker reports a missing `DOCKER` chain after a manual firewall change, restart Docker so it recreates its NAT/filter chains.
+- `setup-firewall.sh` does not perform firewall transitions or iptables backend switches while Docker iptables chains are present, even if they are stale chains left after stopping Docker. If Docker reports a missing `DOCKER` chain after a manual firewall change, restart Docker so it recreates its NAT/filter chains.
 - No configuration needed if WAN auto-detection works: detection and application are fully automatic.
 
 Verification after a run:
@@ -267,20 +268,22 @@ LOG + DROP rules with `ctstate NEW`, `match-set blacklist src` and `in ens160` (
 
 ### Cron automation
 
-`setup-firewall.sh` offers crontab configuration at the end of its execution (step 8). This is the recommended method — idempotent, detects the existing path and preserves the rest of the crontab.
+`setup-firewall.sh` offers crontab configuration at the end of its execution (step 8). This is the recommended method — idempotent, removes previous ipshield cron lines/marker blocks and preserves the rest of the crontab.
 
 To reconfigure the crontab later without touching the firewall: rerun `./setup-firewall.sh` and pick the already-active firewall.
 
 The script applies the following default schedule:
 
 ```
+# ipshield cron begin
 0 */12 * * * /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
 @reboot sleep 60 && echo "--- Trigger: reboot on $(date '+\%Y-\%m-\%d \%H:\%M:\%S \%Z') ---" >> /var/log/update-blocklist.log && /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+# ipshield cron end
 ```
 
 - `sleep 60` at `@reboot`: gives Docker time to start before the script looks for the `DOCKER-USER` chain (adjustable via the prompt).
 - The `@reboot` line writes a `Trigger: reboot` marker to `/var/log/update-blocklist.log` before the update starts, so reboot-triggered runs are easy to distinguish from scheduled cron runs.
-- `MAILTO=...` is added at the top if an email address is provided: cron sends mail on each error (stderr output).
+- `MAILTO=...` is added inside the ipshield cron block if an email address is provided. If an existing root crontab `MAILTO` differs, it is restored after the ipshield block so unrelated jobs keep their recipient.
 
 #### Manual configuration (alternative)
 
@@ -383,7 +386,11 @@ cat > /etc/logrotate.d/blocked-ips << 'EOF'
 	compress
 	delaycompress
 	postrotate
-		/usr/lib/rsyslog/rsyslog-rotate
+		if [ -x /usr/lib/rsyslog/rsyslog-rotate ]; then
+			/usr/lib/rsyslog/rsyslog-rotate
+		else
+			/bin/systemctl reload rsyslog 2>/dev/null || true
+		fi
 	endscript
 }
 EOF
@@ -523,8 +530,8 @@ Variables (toutes définies avec leur valeur prod-ready dans le fichier d'exempl
 | Variable | Défaut | Description |
 |---|---|---|
 | `URLS` | voir ci-dessous | Tableau des URLs de listes de blocage |
-| `SET_NAME` | `blacklist` | Nom du set ipset blacklist |
-| `WHITELIST_SET_NAME` | `${SET_NAME}-allow` | Nom du set ipset whitelist |
+| `SET_NAME` | `blacklist` | Nom du set ipset blacklist (max 31 caractères) |
+| `WHITELIST_SET_NAME` | `${SET_NAME}-allow` | Nom du set ipset whitelist (max 31 caractères) |
 | `WHITELIST` | `()` (vide) | Tableau d'IP/CIDR IPv4 toujours autorisés (voir [Whitelist](#whitelist-1)) |
 | `WHITELIST_MIN_PREFIX` | `8` | Préfixe minimum accepté en WHITELIST (rejette /0 à /7 pour éviter un bypass total par typo). Mettre à 0 pour désactiver. |
 | `BLOCKLIST_MIN_PREFIX` | `8` | Préfixe minimum accepté depuis les sources externes (rejette /0 à /7). Garde-fou contre une source corrompue ou malveillante qui injecterait `0.0.0.0/0`, ce qui verrouillerait l'accès au serveur entier. Mettre à 0 pour désactiver. |
@@ -534,6 +541,7 @@ Variables (toutes définies avec leur valeur prod-ready dans le fichier d'exempl
 | `LOG_LIMIT` | `60/min` | Rate-limit du logging des paquets bloqués (`N/sec`, `N/min`, `N/hour`, `N/day` ; vide = pas de limite) |
 | `LOG_BURST` | `100` | Burst maximum avant que `LOG_LIMIT` s'applique |
 | `WAN_INTERFACE` | `""` (auto) | Interface WAN pour scoper la règle DOCKER-USER au trafic entrant uniquement. Vide = auto-détection via `ip route get 8.8.8.8`. À définir explicitement si l'auto-détection donne le mauvais résultat (ex : VPN). |
+| `LOOKUP_CACHE_TTL` | `21600` | TTL du cache en secondes pour les téléchargements de `lookup-ip.sh` (`0` désactive le cache) |
 
 #### Sources par défaut
 
@@ -568,7 +576,7 @@ Le script `setup-firewall.sh` détecte, installe et active un firewall sur le sy
 Le script :
 1. Détecte le firewall actif (firewalld, ufw, nftables ou iptables)
 2. Propose un menu avec les 4 options
-3. Détecte automatiquement les ports TCP en écoute (non-loopback) et propose de les ouvrir avant activation (protection anti-lockout)
+3. Détecte automatiquement les ports TCP/UDP en écoute (non-loopback) et propose de les ouvrir avant activation (protection anti-lockout)
 4. Désactive l'ancien firewall si un autre est choisi (avec rollback automatique en cas d'échec)
 5. Installe et active le nouveau firewall
 6. Vérifie que le firewall répond après activation (sinon rollback)
@@ -583,7 +591,7 @@ Détails de sélection du backend :
 - Le choix **iptables** sélectionne `iptables-legacy`/`ip6tables-legacy` via `update-alternatives` quand ces binaires sont disponibles.
 - Le choix **nftables** sélectionne `iptables-nft`/`ip6tables-nft` via `update-alternatives` quand ces binaires sont disponibles, car le projet applique les règles du chemin nftables via iptables-nft afin de conserver le support du match ipset.
 
-Sécurité Docker : si des chaînes iptables gérées par Docker sont présentes, `setup-firewall.sh` refuse les transitions firewall et les changements de backend iptables au lieu de risquer de supprimer ou masquer les chaînes NAT/filter de Docker. Effectuer les transitions firewall avant de démarrer Docker, ou arrêter Docker et faire la transition pendant une fenêtre de maintenance.
+Sécurité Docker : si des chaînes iptables Docker sont présentes, `setup-firewall.sh` refuse les transitions firewall et les changements de backend iptables au lieu de risquer de supprimer ou masquer les chaînes NAT/filter de Docker. `systemctl stop docker` peut laisser ces chaînes en place ; effectuer les transitions avant de démarrer Docker, rebooter après arrêt de Docker, ou nettoyer manuellement les chaînes Docker résiduelles pendant une fenêtre de maintenance.
 
 #### Étape 2 : Lancer le blocage (première exécution)
 
@@ -622,7 +630,7 @@ Si une IP apparaît dans les logs (`BLOCKED:`), identifier sa source :
 ./lookup-ip.sh --verbose 1.2.3.4
 ```
 
-Le script télécharge les listes à la volée et indique dans quelle(s) source(s) l'IP apparaît. Fonctionne sans root (la vérification ipset est ignorée).
+Le script télécharge les listes à la volée et indique dans quelle(s) source(s) l'IP apparaît. Les téléchargements sont mis en cache pendant `LOOKUP_CACHE_TTL` secondes (défaut : 6 heures, `LOOKUP_CACHE_TTL=0` pour désactiver). Fonctionne sans root (la vérification ipset est ignorée).
 
 ### Whitelist
 
@@ -721,7 +729,7 @@ Les règles blocklist sont aussi limitées à `conntrack --ctstate NEW`. Pour TC
 
 - Docker recrée `DOCKER-USER` à chaque restart du daemon — les règles ne persistent pas. Le cron + `@reboot` les réapplique automatiquement, et l'idempotence évite les doublons.
 - Si le script s'exécute au boot avant Docker, `DOCKER-USER` n'existe pas encore — la détection est correctement négative. Le prochain cron rattrapera.
-- `setup-firewall.sh` ne fait pas de transition firewall ni de changement de backend iptables lorsque des chaînes iptables gérées par Docker sont présentes. Si Docker signale une chaîne `DOCKER` manquante après un changement manuel de firewall, redémarrer Docker pour qu'il recrée ses chaînes NAT/filter.
+- `setup-firewall.sh` ne fait pas de transition firewall ni de changement de backend iptables lorsque des chaînes iptables Docker sont présentes, y compris des chaînes résiduelles après arrêt de Docker. Si Docker signale une chaîne `DOCKER` manquante après un changement manuel de firewall, redémarrer Docker pour qu'il recrée ses chaînes NAT/filter.
 - Aucune configuration nécessaire si l'auto-détection WAN fonctionne : la détection et l'application sont entièrement automatiques.
 
 Vérification après exécution :
@@ -734,20 +742,22 @@ Les règles LOG + DROP avec `ctstate NEW`, `match-set blacklist src` et `in ens1
 
 ### Automatisation (cron)
 
-`setup-firewall.sh` propose la configuration du crontab à la fin de son exécution (étape 8). C'est la méthode recommandée — elle est idempotente, détecte le chemin existant et préserve le reste du crontab.
+`setup-firewall.sh` propose la configuration du crontab à la fin de son exécution (étape 8). C'est la méthode recommandée — elle est idempotente, retire les anciennes lignes/blocs cron ipshield et préserve le reste du crontab.
 
 Pour reconfigurer le crontab plus tard sans toucher au firewall : relancer `./setup-firewall.sh` et choisir le firewall déjà actif.
 
 Le script applique le schedule par défaut suivant :
 
 ```
+# ipshield cron begin
 0 */12 * * * /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
 @reboot sleep 60 && echo "--- Trigger: reboot on $(date '+\%Y-\%m-\%d \%H:\%M:\%S \%Z') ---" >> /var/log/update-blocklist.log && /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+# ipshield cron end
 ```
 
 - `sleep 60` au `@reboot` : laisse le temps à Docker de démarrer avant que le script cherche la chaîne `DOCKER-USER` (ajustable via le prompt).
 - La ligne `@reboot` écrit un marqueur `Trigger: reboot` dans `/var/log/update-blocklist.log` avant le démarrage de l'update, afin de distinguer facilement les runs déclenchés par reboot des runs cron planifiés.
-- `MAILTO=...` ajouté en haut si une adresse email est fournie : cron envoie un mail à chaque erreur (sortie sur stderr).
+- `MAILTO=...` est ajouté dans le bloc cron ipshield si une adresse email est fournie. Si un `MAILTO` root existant diffère, il est restauré après le bloc ipshield afin de préserver les autres jobs.
 
 #### Configuration manuelle (alternative)
 
@@ -850,7 +860,11 @@ cat > /etc/logrotate.d/blocked-ips << 'EOF'
 	compress
 	delaycompress
 	postrotate
-		/usr/lib/rsyslog/rsyslog-rotate
+		if [ -x /usr/lib/rsyslog/rsyslog-rotate ]; then
+			/usr/lib/rsyslog/rsyslog-rotate
+		else
+			/bin/systemctl reload rsyslog 2>/dev/null || true
+		fi
 	endscript
 }
 EOF

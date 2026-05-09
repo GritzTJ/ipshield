@@ -109,6 +109,10 @@ if [[ ! "$SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
   echo "Error: SET_NAME invalid ('$SET_NAME'). Only [a-zA-Z0-9_-] allowed." >&2
   exit 1
 fi
+if [ "${#SET_NAME}" -gt 31 ]; then
+  echo "Error: SET_NAME too long (${#SET_NAME} > 31)." >&2
+  exit 1
+fi
 
 # --- Whitelist set name (derived from SET_NAME if undefined) ---
 : "${WHITELIST_SET_NAME:=${SET_NAME}-allow}"
@@ -394,6 +398,7 @@ _firewalld_reload_or_restart() {
 _remove_firewalld_block_rules() {
   local chain="$1"
   local line
+  local removed=0
   while true; do
     line="$(_firewalld_get_all_direct_rules \
       | grep -E "^ipv4 filter $chain .*--match-set $SET_NAME src.*-j (LOG|DROP)" \
@@ -402,9 +407,13 @@ _remove_firewalld_block_rules() {
     _firewalld_parse_direct_rule_line "$line"
     if ! _firewalld_remove_direct_rule "${FIREWALLD_DIRECT_RULE_ARGS[@]}"; then
       err "Warning: cannot remove firewalld direct rule: $line"
+      err "Tip: inspect with 'firewall-cmd --permanent --direct --get-all-rules' and remove orphans manually with '--remove-rule'."
+      [ "$removed" -eq 1 ] && return 0
       return 1
     fi
+    removed=1
   done
+  return 0
 }
 
 _remove_firewalld_set_rules() {
@@ -469,7 +478,7 @@ _ufw_preflight_ipsets() {
   done < <(_ufw_referenced_sets)
 
   if [ "${#orphans[@]}" -gt 0 ]; then
-    cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
+    cp /etc/ufw/before.rules /etc/ufw/before.rules.ipshield.bak
     snapshot="${TMP_DIR}/ufw-before.rules.preflight"
     cp /etc/ufw/before.rules "$snapshot"
     for ref_set in "${orphans[@]}"; do
@@ -492,7 +501,7 @@ _ufw_preflight_ipsets() {
 
 _ufw_snapshot_before_rules() {
   local snapshot="$1"
-  cp /etc/ufw/before.rules /etc/ufw/before.rules.bak
+  cp /etc/ufw/before.rules /etc/ufw/before.rules.ipshield.bak
   cp /etc/ufw/before.rules "$snapshot"
 }
 
@@ -658,9 +667,8 @@ _whitelist_or_cleanup_firewalld() {
 _warn_hidden_docker_chains() {
   if docker_iptables_chains_present; then
     err "Warning: Docker chains exist outside the current iptables backend; DOCKER-USER was not modified."
-    return 0
   fi
-  return 1
+  return 0
 }
 
 # --- Firewall rules application ---
@@ -687,7 +695,7 @@ apply_firewall_rules() {
         _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
       else
-        _warn_hidden_docker_chains || true
+        _warn_hidden_docker_chains
       fi
       ;;
 
@@ -705,7 +713,7 @@ apply_firewall_rules() {
         _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
       else
-        _warn_hidden_docker_chains || true
+        _warn_hidden_docker_chains
       fi
       ;;
 
@@ -751,7 +759,7 @@ apply_firewall_rules() {
         _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
       else
-        _warn_hidden_docker_chains || true
+        _warn_hidden_docker_chains
       fi
       ;;
 
@@ -801,7 +809,7 @@ $ufw_drop_line
         local ufw_snapshot
         ufw_snapshot="${TMP_DIR}/ufw-before.rules.whitelist-remove"
         _ufw_snapshot_before_rules "$ufw_snapshot"
-        sed -i "/match-set $WHITELIST_SET_NAME src -j ACCEPT/d" /etc/ufw/before.rules
+        sed -i "/^-A ufw-before-input .*--match-set $WHITELIST_SET_NAME src -j ACCEPT/d" /etc/ufw/before.rules
         if ! _ufw_reload_or_rollback "$ufw_snapshot" "whitelist rule removal"; then
           return 1
         fi
@@ -813,7 +821,7 @@ $ufw_drop_line
         _whitelist_or_cleanup_iptables DOCKER-USER "$WAN_INTERFACE"
         docker_protected=1
       else
-        _warn_hidden_docker_chains || true
+        _warn_hidden_docker_chains
       fi
       ;;
   esac

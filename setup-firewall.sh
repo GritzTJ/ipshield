@@ -17,7 +17,7 @@ Interactive script that installs and configures a firewall.
 Detects the active firewall, offers a choice among iptables, nftables,
 firewalld and ufw, then performs the transition.
 
-Before activation, automatically detects listening TCP ports
+Before activation, automatically detects listening TCP/UDP ports
 (non-loopback) and offers to allow them, to avoid breaking exposed
 services (SSH, web, etc.).
 EOF
@@ -66,11 +66,24 @@ fi
 need_cmd systemctl
 
 # --- Package manager detection ---
-if command -v apt >/dev/null 2>&1; then
-  PKG_MANAGER="apt"
-elif command -v dnf >/dev/null 2>&1; then
-  PKG_MANAGER="dnf"
-else
+PKG_MANAGER=""
+if [ -r /etc/os-release ]; then
+  # shellcheck source=/dev/null
+  . /etc/os-release
+  os_ids="${ID:-} ${ID_LIKE:-}"
+  case "$os_ids" in
+    *fedora*|*rhel*|*centos*|*rocky*|*almalinux*) PKG_MANAGER="dnf" ;;
+    *debian*|*ubuntu*) PKG_MANAGER="apt" ;;
+  esac
+fi
+if [ -z "$PKG_MANAGER" ]; then
+  if command -v apt >/dev/null 2>&1; then
+    PKG_MANAGER="apt"
+  elif command -v dnf >/dev/null 2>&1; then
+    PKG_MANAGER="dnf"
+  fi
+fi
+if [ -z "$PKG_MANAGER" ]; then
   err "unsupported package manager (apt or dnf required)."
   exit 1
 fi
@@ -89,6 +102,18 @@ docker_iptables_chains_present() {
     "$bin" -S DOCKER-USER >/dev/null 2>&1 && return 0
   done
   return 1
+}
+
+explain_docker_chains_block() {
+  err "Docker iptables chains are present (DOCKER-USER and/or nat/DOCKER)."
+  err "Refusing this operation because deleting or hiding those chains can break Docker published ports."
+  err "If Docker is running, stop it and use a maintenance window."
+  err "If Docker is already stopped, its chains can still persist until reboot or manual cleanup."
+  err "Recovery options: reboot, or clean stale Docker chains manually, then rerun setup."
+  err "Example after Docker is stopped and containers are down:"
+  err "  iptables -F DOCKER-USER 2>/dev/null; iptables -X DOCKER-USER 2>/dev/null"
+  err "  iptables -t nat -F DOCKER 2>/dev/null; iptables -t nat -X DOCKER 2>/dev/null"
+  err "Use iptables-nft or iptables-legacy instead if the stale chains are in that backend."
 }
 
 nft_input_hook_present() {
@@ -163,15 +188,12 @@ configure_cron() {
   local current_cron
   current_cron="$(crontab -l 2>/dev/null || true)"
 
-  # Default path: existing crontab > same directory as this script
-  local script_dir script_path log_path mailto reboot_delay existing_path
+  # Default path: same directory as this script. Existing ipshield cron lines
+  # are removed by basename below; the default is intentionally not parsed back
+  # from crontab because quoted paths with spaces are ambiguous in cron syntax.
+  local script_dir script_path log_path mailto reboot_delay
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   script_path="$script_dir/update-blocklist.sh"
-  existing_path="$(printf '%s\n' "$current_cron" | awk '
-    /update-blocklist\.sh/ {
-      for (i=1; i<=NF; i++) if ($i ~ /update-blocklist\.sh$/) { print $i; exit }
-    }')"
-  [ -n "$existing_path" ] && script_path="$existing_path"
 
   read -rp "Path to update-blocklist.sh [$script_path]: " ans
   [ -n "$ans" ] && script_path="$ans"
@@ -200,16 +222,19 @@ configure_cron() {
     reboot_delay="$ans"
   fi
 
-  # Filter existing ipshield lines (by basename) + MAILTO if a new one is set
+  # Filter existing ipshield lines (by basename), plus future marker blocks.
+  # Do not remove global MAILTO lines from the user's crontab: cron variables
+  # are positional and may apply to unrelated jobs.
   local filtered_cron new_lines new_cron reboot_log_cmd script_cmd log_cmd
-  local script_basename mailto_drop
+  local script_basename existing_mailto
   script_basename="$(basename "$script_path")"
-  mailto_drop=0
-  [ -n "$mailto" ] && mailto_drop=1
+  existing_mailto="$(printf '%s\n' "$current_cron" | awk '/^[[:space:]]*MAILTO=/{print; exit}')"
 
-  filtered_cron="$(printf '%s\n' "$current_cron" | awk -v base="$script_basename" -v drop_mailto="$mailto_drop" '
+  filtered_cron="$(printf '%s\n' "$current_cron" | awk -v base="$script_basename" '
+    /^[[:space:]]*# ipshield cron begin$/ { skip=1; next }
+    /^[[:space:]]*# ipshield cron end$/ { skip=0; next }
+    skip { next }
     index($0, base) { next }
-    drop_mailto && /^[[:space:]]*MAILTO=/ { next }
     { print }
   ')"
   filtered_cron="${filtered_cron%$'\n'}"
@@ -221,14 +246,19 @@ configure_cron() {
   script_cmd="$(shell_quote "$script_path")"
   log_cmd="$(shell_quote "$log_path")"
   reboot_log_cmd="echo \"--- Trigger: reboot on \$(date '+\\%Y-\\%m-\\%d \\%H:\\%M:\\%S \\%Z') ---\" >> $log_cmd"
-  new_lines=""
+  new_lines="# ipshield cron begin"$'\n'
   [ -n "$mailto" ] && new_lines+="MAILTO=$mailto"$'\n'
   new_lines+="0 */12 * * * $script_cmd >> $log_cmd 2>&1"$'\n'
   if [ "$reboot_delay" -gt 0 ]; then
-    new_lines+="@reboot sleep $reboot_delay && $reboot_log_cmd && $script_cmd >> $log_cmd 2>&1"
+    new_lines+="@reboot sleep $reboot_delay && $reboot_log_cmd && $script_cmd >> $log_cmd 2>&1"$'\n'
   else
-    new_lines+="@reboot $reboot_log_cmd && $script_cmd >> $log_cmd 2>&1"
+    new_lines+="@reboot $reboot_log_cmd && $script_cmd >> $log_cmd 2>&1"$'\n'
   fi
+  if [ -n "$mailto" ] && [ -n "$existing_mailto" ] && [ "$existing_mailto" != "MAILTO=$mailto" ]; then
+    log "Existing crontab MAILTO will be preserved after the ipshield block: $existing_mailto"
+    new_lines+="$existing_mailto"$'\n'
+  fi
+  new_lines+="# ipshield cron end"
 
   # Concatenation
   if [ -n "$filtered_cron" ]; then
@@ -384,8 +414,10 @@ configure_ipset_restore() {
   unit_content="[Unit]
 Description=Restore ipshield ipsets before firewall start
 DefaultDependencies=no
+After=local-fs.target
 Before=netfilter-persistent.service nftables.service ufw.service firewalld.service
 ConditionPathExists=$save_file
+RequiresMountsFor=$save_dir
 
 [Service]
 Type=oneshot
@@ -490,7 +522,11 @@ configure_logs() {
 	compress
 	delaycompress
 	postrotate
-		/usr/lib/rsyslog/rsyslog-rotate
+		if [ -x /usr/lib/rsyslog/rsyslog-rotate ]; then
+			/usr/lib/rsyslog/rsyslog-rotate
+		else
+			/bin/systemctl reload rsyslog 2>/dev/null || true
+		fi
 	endscript
 }'
 
@@ -526,13 +562,15 @@ if command -v nft >/dev/null 2>&1; then
   if nft list chain inet admin_access input 2>/dev/null | grep -qE "priority [^;]*-[[:space:]]*10[[:space:]]*;"; then
     log "Migration: 'inet admin_access input' chain detected at priority -10 (legacy bug)."
     existing_ports="$(nft list chain inet admin_access input 2>/dev/null \
-      | awk '/tcp dport [0-9]+ accept/{for(i=1;i<=NF;i++) if ($i=="dport") print $(i+1)}' \
+      | awk '/(tcp|udp) dport [0-9]+ accept/{for(i=1;i<=NF;i++) if ($i=="dport") print $(i+1) "/" $(i-1)}' \
       | tr '\n' ' ' | sed 's/ *$//')"
     nft delete chain inet admin_access input
     nft add chain inet admin_access input '{ type filter hook input priority 10 ; policy accept ; }'
-    if [ -n "$existing_ports" ]; then
-      for p in $existing_ports; do
-        nft add rule inet admin_access input tcp dport "$p" accept
+    if [ -n "${existing_ports:-}" ]; then
+      for entry in $existing_ports; do
+        p="${entry%/*}"
+        proto="${entry#*/}"
+        nft add rule inet admin_access input "$proto" dport "$p" accept
       done
       log "  Rules restored: ports $existing_ports"
     fi
@@ -646,9 +684,9 @@ ensure_iptables_backend() {
   [ "$current" = "$backend" ] && return 0
 
   if docker_iptables_chains_present; then
-    err "Docker-managed iptables chains detected."
-    err "Refusing to switch iptables backend from '$current' to '$backend' while Docker is active."
-    err "Stop Docker and rerun setup during a maintenance window, or keep the current backend."
+    explain_docker_chains_block
+    err "Refusing to switch iptables backend from '$current' to '$backend' while Docker chains are present."
+    err "Keep the current backend, reboot after stopping Docker, or clean stale Docker chains manually."
     exit 1
   fi
 
@@ -669,9 +707,9 @@ ensure_iptables_backend() {
 # published ports. Require Docker to be stopped for any transition; the already
 # active firewall path remains allowed as long as no backend switch is needed.
 if [ "$FIREWALL" != "$DETECTED" ] && docker_iptables_chains_present; then
-  err "Docker-managed iptables chains detected."
-  err "Refusing firewall transition from '$DETECTED' to '$FIREWALL' while Docker is active."
-  err "Stop Docker and rerun setup during a maintenance window, or choose the already-active firewall."
+  explain_docker_chains_block
+  err "Refusing firewall transition from '$DETECTED' to '$FIREWALL' while Docker chains are present."
+  err "Choose the already-active firewall, reboot after stopping Docker, or clean stale Docker chains manually."
   exit 1
 fi
 
@@ -696,17 +734,20 @@ fi
 echo ""
 log "Installing and enabling: $FIREWALL"
 
-# --- Listening TCP ports detection (non-loopback) ---
+# --- Listening TCP/UDP ports detection (non-loopback) ---
 # Pre-fills the list of ports to allow before activating the new firewall,
 # to avoid breaking exposed services.
 detect_listening_ports() {
   if ! command -v ss >/dev/null 2>&1; then
     return 0
   fi
-  ss -tlnp 2>/dev/null | awk '
-    NR == 1 { next }
+  {
+    ss -tlnp 2>/dev/null | awk -v proto="tcp" 'NR > 1 { print proto, $0 }'
+    ss -ulnp 2>/dev/null | awk -v proto="udp" 'NR > 1 { print proto, $0 }'
+  } | awk '
     {
-      addr_port = $4
+      proto = $1
+      addr_port = $5
       n = split(addr_port, parts, ":")
       port = parts[n]
       addr = substr(addr_port, 1, length(addr_port) - length(port) - 1)
@@ -721,25 +762,25 @@ detect_listening_ports() {
           break
         }
       }
-      print port, proc
+      print port "/" proto, proc
     }
-  ' | sort -n | awk '!seen[$1]++'
+  ' | sort -t/ -k1,1n -k2,2 | awk '!seen[$1]++'
 }
 
 LISTENING="$(detect_listening_ports)"
 
 echo ""
 if [ -n "$LISTENING" ]; then
-  log "TCP ports currently listening (non-loopback):"
-  while IFS=' ' read -r port proc; do
-    printf "  %-12s %s\n" "${port}/tcp" "$proc"
+  log "TCP/UDP ports currently listening (non-loopback):"
+  while IFS=' ' read -r entry proc; do
+    printf "  %-12s %s\n" "$entry" "$proc"
   done <<< "$LISTENING"
   echo ""
   DEFAULT_PORTS="$(echo "$LISTENING" | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')"
-  read -rp "TCP ports to open before activation (default: $DEFAULT_PORTS, edit the list or 'no' to skip): " SAFE_PORTS
+  read -rp "Ports to open before activation (port[/tcp|/udp], default: $DEFAULT_PORTS, edit the list or 'no' to skip): " SAFE_PORTS
   [ -z "$SAFE_PORTS" ] && SAFE_PORTS="$DEFAULT_PORTS"
 else
-  read -rp "TCP ports to open before activation (space-separated, empty to skip): " SAFE_PORTS
+  read -rp "Ports to open before activation (port[/tcp|/udp], bare port = tcp, empty to skip): " SAFE_PORTS
 fi
 
 # Handle explicit refusal
@@ -747,15 +788,23 @@ if [ "$SAFE_PORTS" = "no" ] || [ "$SAFE_PORTS" = "n" ]; then
   SAFE_PORTS=""
 fi
 
-# Validation: each port must be 1-65535, then dedup + sort
+# Validation: each port must be 1-65535. Bare ports default to tcp.
 if [ -n "$SAFE_PORTS" ]; then
-  for p in $SAFE_PORTS; do
-    if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
+  normalized_safe_ports=""
+  for entry in $SAFE_PORTS; do
+    if ! [[ "$entry" =~ ^([0-9]+)(/(tcp|udp))?$ ]]; then
+      err "invalid port/protocol: $entry"
+      exit 1
+    fi
+    p="${BASH_REMATCH[1]}"
+    proto="${BASH_REMATCH[3]:-tcp}"
+    if [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
       err "invalid port: $p"
       exit 1
     fi
+    normalized_safe_ports+="$p/$proto"$'\n'
   done
-  SAFE_PORTS="$(echo "$SAFE_PORTS" | tr ' ' '\n' | sort -un | tr '\n' ' ' | sed 's/ *$//')"
+  SAFE_PORTS="$(printf '%s' "$normalized_safe_ports" | sort -t/ -k1,1n -k2,2 -u | tr '\n' ' ' | sed 's/ *$//')"
 fi
 
 # --- Automatic rollback on failure ---
@@ -788,6 +837,7 @@ rollback() {
         fi ;;
     esac
   fi
+  rm -f "${IPTABLES_BACKUP:-}" "${IPTABLES_BACKUP6:-}" 2>/dev/null || true
 }
 trap rollback EXIT INT TERM
 
@@ -809,9 +859,8 @@ if [ "$DETECTED" != "none" ]; then
       ;;
     iptables)
       if docker_iptables_chains_present; then
-        err "Docker-managed iptables chains detected."
-        err "Refusing to flush iptables tables because this can break Docker published ports."
-        err "Stop Docker and rerun setup during a maintenance window, or keep the existing firewall transition-free."
+        explain_docker_chains_block
+        err "Refusing to flush iptables tables."
         exit 1
       fi
       # Backup rules before flush (for rollback on failure)
@@ -879,10 +928,12 @@ case "$FIREWALL" in
   iptables)
     ensure_iptables_backend legacy
     if [ -n "$SAFE_PORTS" ]; then
-      for p in $SAFE_PORTS; do
-        iptables -I INPUT -p tcp --dport "$p" -j ACCEPT
+      for entry in $SAFE_PORTS; do
+        p="${entry%/*}"
+        proto="${entry#*/}"
+        iptables -I INPUT -p "$proto" --dport "$p" -j ACCEPT
         if command -v ip6tables >/dev/null 2>&1; then
-          ip6tables -I INPUT -p tcp --dport "$p" -j ACCEPT
+          ip6tables -I INPUT -p "$proto" --dport "$p" -j ACCEPT
         fi
       done
       log "Ports opened (iptables IPv4 + IPv6): $SAFE_PORTS"
@@ -898,8 +949,10 @@ case "$FIREWALL" in
       # Priority 10 (POSITIVE, after the blocklist at priority 0): if an IP is
       # blacklisted, it is dropped by the blocklist BEFORE reaching this ACCEPT.
       nft add chain inet admin_access input '{ type filter hook input priority 10 ; policy accept ; }' 2>/dev/null || true
-      for p in $SAFE_PORTS; do
-        nft add rule inet admin_access input tcp dport "$p" accept
+      for entry in $SAFE_PORTS; do
+        p="${entry%/*}"
+        proto="${entry#*/}"
+        nft add rule inet admin_access input "$proto" dport "$p" accept
       done
       log "Ports opened (nftables): $SAFE_PORTS"
     fi
@@ -908,8 +961,8 @@ case "$FIREWALL" in
     systemctl enable firewalld
     systemctl start firewalld
     if [ -n "$SAFE_PORTS" ]; then
-      for p in $SAFE_PORTS; do
-        firewall-cmd --permanent --add-port="$p"/tcp >/dev/null
+      for entry in $SAFE_PORTS; do
+        firewall-cmd --permanent --add-port="$entry" >/dev/null
       done
       firewall-cmd --reload >/dev/null
       log "Ports opened (firewalld): $SAFE_PORTS"
@@ -917,8 +970,8 @@ case "$FIREWALL" in
     ;;
   ufw)
     if [ -n "$SAFE_PORTS" ]; then
-      for p in $SAFE_PORTS; do
-        ufw allow "$p"/tcp
+      for entry in $SAFE_PORTS; do
+        ufw allow "$entry"
       done
       log "Ports opened (ufw): $SAFE_PORTS"
     fi

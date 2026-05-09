@@ -101,12 +101,32 @@ if [ "${#URLS[@]}" -eq 0 ]; then
   exit 1
 fi
 : "${SET_NAME:=blacklist}"
+if [[ ! "$SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  echo "Error: SET_NAME invalid ('$SET_NAME'). Only [a-zA-Z0-9_-] allowed." >&2
+  exit 1
+fi
+if [ "${#SET_NAME}" -gt 31 ]; then
+  echo "Error: SET_NAME too long (${#SET_NAME} > 31)." >&2
+  exit 1
+fi
 
 # --- Apply CLI overrides ---
 [ -n "$CLI_VERBOSE" ] && VERBOSE=1
 
 # --- Whitelist set name (derived if undefined) ---
 : "${WHITELIST_SET_NAME:=${SET_NAME}-allow}"
+if [[ ! "$WHITELIST_SET_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  echo "Error: WHITELIST_SET_NAME invalid ('$WHITELIST_SET_NAME'). Only [a-zA-Z0-9_-] allowed." >&2
+  exit 1
+fi
+if [ "${#WHITELIST_SET_NAME}" -gt 31 ]; then
+  echo "Error: WHITELIST_SET_NAME too long (${#WHITELIST_SET_NAME} > 31)." >&2
+  exit 1
+fi
+if [ "$WHITELIST_SET_NAME" = "$SET_NAME" ]; then
+  echo "Error: WHITELIST_SET_NAME must differ from SET_NAME." >&2
+  exit 1
+fi
 
 # --- BLOCKLIST_MIN_PREFIX default + validation ---
 # Same safeguard as update-blocklist.sh: an external CIDR with prefix shorter
@@ -115,6 +135,16 @@ fi
 : "${BLOCKLIST_MIN_PREFIX:=8}"
 if ! [[ "$BLOCKLIST_MIN_PREFIX" =~ ^[0-9]+$ ]] || [ "$BLOCKLIST_MIN_PREFIX" -lt 0 ] || [ "$BLOCKLIST_MIN_PREFIX" -gt 32 ]; then
   echo "Error: BLOCKLIST_MIN_PREFIX invalid ('$BLOCKLIST_MIN_PREFIX'). Integer 0-32 expected." >&2
+  exit 1
+fi
+
+# --- Lookup cache ---
+# lookup-ip.sh is an interactive diagnostic helper; caching avoids downloading
+# every public source again for each IP checked. Set LOOKUP_CACHE_TTL=0 to
+# disable the cache.
+: "${LOOKUP_CACHE_TTL:=21600}"
+if ! [[ "$LOOKUP_CACHE_TTL" =~ ^[0-9]+$ ]]; then
+  echo "Error: LOOKUP_CACHE_TTL invalid ('$LOOKUP_CACHE_TTL'). Integer seconds expected." >&2
   exit 1
 fi
 
@@ -154,6 +184,9 @@ fi
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { err "Error: missing command: $1"; exit 1; }; }
 need_cmd curl
 need_cmd awk
+if [ "$LOOKUP_CACHE_TTL" -gt 0 ]; then
+  need_cmd cksum
+fi
 
 # --- Source name from URL ---
 source_name() {
@@ -183,6 +216,16 @@ else
 fi
 cleanup() { rm -rf -- "$TMP_DIR" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
+
+LOOKUP_CACHE_DIR=""
+if [ "$LOOKUP_CACHE_TTL" -gt 0 ]; then
+  if [ "$(id -u)" -eq 0 ]; then
+    LOOKUP_CACHE_DIR="/var/cache/ipshield/lookup"
+  else
+    LOOKUP_CACHE_DIR="${XDG_CACHE_HOME:-${HOME:-/tmp/.cache}}/ipshield/lookup"
+  fi
+  mkdir -p "$LOOKUP_CACHE_DIR" 2>/dev/null || LOOKUP_CACHE_DIR=""
+fi
 
 # --- AWK program: extraction + IPv4/CIDR validation (identical to update-blocklist.sh) ---
 AWK_PROG='
@@ -260,6 +303,25 @@ BEGIN {
 # --- curl options ---
 CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize 10485760 --retry 3 --retry-delay 2 --retry-all-errors )
 
+cache_path_for_url() {
+  local idx="$1"
+  local url="$2"
+  local sum
+  [ -n "$LOOKUP_CACHE_DIR" ] || return 1
+  sum="$(printf '%s' "$url" | cksum | awk '{print $1}')"
+  printf '%s/source-%s-%s.txt' "$LOOKUP_CACHE_DIR" "$idx" "$sum"
+}
+
+cache_is_fresh() {
+  local path="$1"
+  local now mtime
+  [ "$LOOKUP_CACHE_TTL" -gt 0 ] || return 1
+  [ -s "$path" ] || return 1
+  now="$(date +%s)"
+  mtime="$(stat -c '%Y' "$path" 2>/dev/null || echo 0)"
+  [ $((now - mtime)) -lt "$LOOKUP_CACHE_TTL" ]
+}
+
 # --- Output ---
 log "Looking up $TARGET_IP across ${#URLS[@]} blocklists..."
 echo ""
@@ -296,15 +358,32 @@ done
 
 # --- Parallel downloads ---
 declare -a DL_PIDS=()
+declare -a DL_FROM_CACHE=()
 for i in "${!URLS[@]}"; do
-  curl "${CURL_OPTS[@]}" "${URLS[$i]}" -o "${TMP_DIR}/dl.${i}" 2>/dev/null &
-  DL_PIDS+=("$!")
+  cache_file=""
+  if cache_file="$(cache_path_for_url "$i" "${URLS[$i]}")" && cache_is_fresh "$cache_file"; then
+    cp "$cache_file" "${TMP_DIR}/dl.${i}"
+    DL_FROM_CACHE[i]=1
+    DL_PIDS[i]=""
+    continue
+  fi
+
+  DL_FROM_CACHE[i]=0
+  (
+    curl "${CURL_OPTS[@]}" "${URLS[$i]}" -o "${TMP_DIR}/dl.${i}" 2>/dev/null
+    if [ -n "$cache_file" ]; then
+      cp "${TMP_DIR}/dl.${i}" "$cache_file" 2>/dev/null || true
+    fi
+  ) &
+  DL_PIDS[i]="$!"
 done
 
 declare -a DL_OK=()
 declare -a DL_FAIL=()
 for i in "${!URLS[@]}"; do
-  if wait "${DL_PIDS[$i]}" 2>/dev/null; then
+  if [ "${DL_FROM_CACHE[$i]:-0}" -eq 1 ]; then
+    DL_OK+=("$i")
+  elif wait "${DL_PIDS[$i]}" 2>/dev/null; then
     DL_OK+=("$i")
   else
     DL_FAIL+=("$i")

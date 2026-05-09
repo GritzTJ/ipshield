@@ -96,7 +96,7 @@ iptables_input_rules_present() {
 
 docker_iptables_chains_present() {
   local bin
-  for bin in iptables iptables-nft iptables-legacy; do
+  for bin in iptables iptables-nft iptables-legacy ip6tables ip6tables-nft ip6tables-legacy; do
     command -v "$bin" >/dev/null 2>&1 || continue
     "$bin" -t nat -S DOCKER >/dev/null 2>&1 && return 0
     "$bin" -S DOCKER-USER >/dev/null 2>&1 && return 0
@@ -106,14 +106,172 @@ docker_iptables_chains_present() {
 
 explain_docker_chains_block() {
   err "Docker iptables chains are present (DOCKER-USER and/or nat/DOCKER)."
-  err "Refusing this operation because deleting or hiding those chains can break Docker published ports."
-  err "If Docker is running, stop it and use a maintenance window."
-  err "If Docker is already stopped, its chains can still persist until reboot or manual cleanup."
-  err "Recovery options: reboot, or clean stale Docker chains manually, then rerun setup."
-  err "Example after Docker is stopped and containers are down:"
-  err "  iptables -F DOCKER-USER 2>/dev/null; iptables -X DOCKER-USER 2>/dev/null"
-  err "  iptables -t nat -F DOCKER 2>/dev/null; iptables -t nat -X DOCKER 2>/dev/null"
-  err "Use iptables-nft or iptables-legacy instead if the stale chains are in that backend."
+  err "Changing firewall or iptables backend while they exist can break Docker published ports."
+  err "They may be active Docker chains or stale Docker chains left after Docker stopped."
+}
+
+docker_daemon_active() {
+  systemctl is-active --quiet docker 2>/dev/null || systemctl is-active --quiet docker.service 2>/dev/null
+}
+
+docker_socket_active() {
+  systemctl is-active --quiet docker.socket 2>/dev/null
+}
+
+docker_active() {
+  docker_daemon_active || docker_socket_active
+}
+
+docker_running_container_count() {
+  if command -v docker >/dev/null 2>&1 && docker_daemon_active; then
+    docker ps -q 2>/dev/null | wc -l | awk '{print $1}'
+  else
+    echo 0
+  fi
+}
+
+cleanup_docker_iptables_bin() {
+  local bin="$1"
+  command -v "$bin" >/dev/null 2>&1 || return 0
+
+  local table chain rule delete_rule
+  local chains=(
+    DOCKER
+    DOCKER-USER
+    DOCKER-FORWARD
+    DOCKER-BRIDGE
+    DOCKER-CT
+    DOCKER-INGRESS
+    DOCKER-ISOLATION-STAGE-1
+    DOCKER-ISOLATION-STAGE-2
+  )
+
+  for table in filter nat mangle raw; do
+    "$bin" -t "$table" -S >/dev/null 2>&1 || continue
+
+    # Delete jumps/gotos to Docker-owned chains before deleting the chains.
+    while read -r rule; do
+      [ -n "$rule" ] || continue
+      delete_rule="${rule/#-A/-D}"
+      # shellcheck disable=SC2086
+      "$bin" -t "$table" $delete_rule >/dev/null 2>&1 || true
+    done < <("$bin" -t "$table" -S 2>/dev/null | grep -E '^-A .*[[:space:]]-[jg][[:space:]]DOCKER(-[A-Z0-9]+)?([[:space:]]|$)' || true)
+
+    for chain in "${chains[@]}"; do
+      "$bin" -t "$table" -F "$chain" >/dev/null 2>&1 || true
+      "$bin" -t "$table" -X "$chain" >/dev/null 2>&1 || true
+    done
+  done
+}
+
+cleanup_docker_iptables_chains() {
+  local bin
+  for bin in iptables iptables-nft iptables-legacy ip6tables ip6tables-nft ip6tables-legacy; do
+    cleanup_docker_iptables_bin "$bin"
+  done
+}
+
+DOCKER_STOPPED_BY_IPSHIELD=0
+DOCKER_SERVICE_WAS_ACTIVE=0
+DOCKER_SOCKET_WAS_ACTIVE=0
+DOCKER_FIREWALL_PREPARED=0
+
+stop_docker_for_firewall_transition() {
+  log "Stopping Docker for firewall transition..."
+
+  docker_daemon_active && DOCKER_SERVICE_WAS_ACTIVE=1
+  docker_socket_active && DOCKER_SOCKET_WAS_ACTIVE=1
+
+  systemctl stop docker.socket 2>/dev/null || true
+  systemctl stop docker.service 2>/dev/null || systemctl stop docker 2>/dev/null || true
+
+  if docker_active; then
+    err "Docker is still active after stop request. Cannot safely clean Docker firewall chains."
+    exit 1
+  fi
+
+  DOCKER_STOPPED_BY_IPSHIELD=1
+}
+
+restart_docker_after_firewall_transition() {
+  [ "$DOCKER_STOPPED_BY_IPSHIELD" -eq 1 ] || return 0
+
+  log "Restarting Docker..."
+  if [ "$DOCKER_SOCKET_WAS_ACTIVE" -eq 1 ]; then
+    systemctl start docker.socket 2>/dev/null || true
+  fi
+  if [ "$DOCKER_SERVICE_WAS_ACTIVE" -eq 1 ] && { systemctl start docker.service 2>/dev/null || systemctl start docker 2>/dev/null; }; then
+    log "Docker restarted."
+    DOCKER_STOPPED_BY_IPSHIELD=0
+    return 0
+  fi
+  if [ "$DOCKER_SERVICE_WAS_ACTIVE" -eq 0 ] && [ "$DOCKER_SOCKET_WAS_ACTIVE" -eq 1 ]; then
+    log "Docker socket restarted."
+    DOCKER_STOPPED_BY_IPSHIELD=0
+    return 0
+  fi
+
+  err "Cannot restart Docker automatically. Start it manually with: systemctl start docker docker.socket"
+  return 1
+}
+
+prepare_docker_firewall_transition() {
+  local reason="$1"
+  local running_count default_answer live_restore
+
+  [ "$DOCKER_FIREWALL_PREPARED" -eq 1 ] && return 0
+  docker_iptables_chains_present || return 0
+
+  echo ""
+  explain_docker_chains_block
+  err "Requested operation: $reason"
+
+  if docker_active; then
+    running_count="$(docker_running_container_count)"
+    default_answer="no"
+    [ "$running_count" -eq 0 ] && default_answer="yes"
+
+    log "Docker is active. Running containers detected: $running_count"
+    if [ "$running_count" -gt 0 ] && command -v docker >/dev/null 2>&1; then
+      log "Running containers:"
+      docker ps --format '  - {{.Names}} ({{.Status}})' 2>/dev/null | sed -n '1,20p' || true
+    fi
+
+    live_restore="false"
+    if command -v docker >/dev/null 2>&1 && docker_daemon_active; then
+      live_restore="$(docker info --format '{{.LiveRestoreEnabled}}' 2>/dev/null || echo false)"
+    fi
+    if [ "$live_restore" = "true" ] && [ "$running_count" -gt 0 ]; then
+      err "Docker live-restore is enabled and containers are running."
+      err "Stop the containers first, then rerun setup-firewall.sh."
+      exit 1
+    fi
+
+    if ! ask_yes_no "Stop Docker, clean Docker firewall chains, continue setup, then restart Docker? This may interrupt containers and published ports." "$default_answer"; then
+      err "Docker firewall preparation declined. Aborting without firewall changes."
+      exit 1
+    fi
+
+    stop_docker_for_firewall_transition
+  else
+    if ! ask_yes_no "Clean stale Docker firewall chains and continue setup?" yes; then
+      err "Docker firewall cleanup declined. Aborting without firewall changes."
+      exit 1
+    fi
+  fi
+
+  log "Cleaning Docker firewall chains..."
+  cleanup_docker_iptables_chains
+
+  if docker_iptables_chains_present; then
+    err "Docker firewall chains are still present after cleanup."
+    err "Stop Docker containers manually or reboot during a maintenance window, then rerun setup-firewall.sh."
+    restart_docker_after_firewall_transition || true
+    exit 1
+  fi
+
+  DOCKER_FIREWALL_PREPARED=1
+  log "Docker firewall chains cleaned."
 }
 
 nft_input_hook_present() {
@@ -684,34 +842,22 @@ ensure_iptables_backend() {
   [ "$current" = "$backend" ] && return 0
 
   if docker_iptables_chains_present; then
-    explain_docker_chains_block
-    err "Refusing to switch iptables backend from '$current' to '$backend' while Docker chains are present."
-    err "Keep the current backend, reboot after stopping Docker, or clean stale Docker chains manually."
-    exit 1
+    prepare_docker_firewall_transition "switch iptables backend from '$current' to '$backend'"
   fi
 
   if ! select_iptables_backend "$backend"; then
+    restart_docker_after_firewall_transition || true
     err "Cannot switch iptables backend to '$backend'."
     exit 1
   fi
 
   current="$(current_iptables_backend)"
   if [ "$current" != "$backend" ]; then
+    restart_docker_after_firewall_transition || true
     err "Requested iptables backend '$backend' but current backend is '$current'."
     exit 1
   fi
 }
-
-# Docker owns iptables/nft compatibility chains while it is running. Firewall
-# transitions can delete or hide those chains (especially nat/DOCKER), breaking
-# published ports. Require Docker to be stopped for any transition; the already
-# active firewall path remains allowed as long as no backend switch is needed.
-if [ "$FIREWALL" != "$DETECTED" ] && docker_iptables_chains_present; then
-  explain_docker_chains_block
-  err "Refusing firewall transition from '$DETECTED' to '$FIREWALL' while Docker chains are present."
-  err "Choose the already-active firewall, reboot after stopping Docker, or clean stale Docker chains manually."
-  exit 1
-fi
 
 # --- Check if already active ---
 if [ "$FIREWALL" = "$DETECTED" ]; then
@@ -721,6 +867,7 @@ if [ "$FIREWALL" = "$DETECTED" ]; then
   elif [ "$FIREWALL" = "nftables" ]; then
     ensure_iptables_backend nft
   fi
+  restart_docker_after_firewall_transition || exit 1
   log "$FIREWALL is already active on this system (no transition needed)."
   configure_conf
   configure_ipset_restore
@@ -837,9 +984,18 @@ rollback() {
         fi ;;
     esac
   fi
+  restart_docker_after_firewall_transition || true
   rm -f "${IPTABLES_BACKUP:-}" "${IPTABLES_BACKUP6:-}" 2>/dev/null || true
 }
 trap rollback EXIT INT TERM
+
+# Docker owns iptables/nft compatibility chains while it is running. Firewall
+# transitions can delete or hide those chains (especially nat/DOCKER), breaking
+# published ports. During an interactive setup, offer to stop Docker, clean
+# Docker-owned chains, continue the transition, then restart Docker.
+if [ "$FIREWALL" != "$DETECTED" ] && docker_iptables_chains_present; then
+  prepare_docker_firewall_transition "firewall transition from '$DETECTED' to '$FIREWALL'"
+fi
 
 # --- Deactivate old firewall ---
 if [ "$DETECTED" != "none" ]; then
@@ -859,9 +1015,7 @@ if [ "$DETECTED" != "none" ]; then
       ;;
     iptables)
       if docker_iptables_chains_present; then
-        explain_docker_chains_block
-        err "Refusing to flush iptables tables."
-        exit 1
+        prepare_docker_firewall_transition "flush iptables tables while disabling old firewall"
       fi
       # Backup rules before flush (for rollback on failure)
       IPTABLES_BACKUP="$(mktemp)"
@@ -1011,6 +1165,8 @@ case "$FIREWALL" in
     ;;
 esac
 log "$FIREWALL is operational."
+
+restart_docker_after_firewall_transition || exit 1
 
 # Disarm the rollback - the new firewall is active
 ROLLBACK_ARMED=0

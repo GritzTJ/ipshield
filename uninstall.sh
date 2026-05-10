@@ -471,6 +471,9 @@ case "$FW" in
     if remove_firewalld_rules INPUT; then need_reload=1; fi
     if remove_firewalld_rules DOCKER-USER; then need_reload=1; fi
     [ "$need_reload" -eq 1 ] && firewall-cmd --reload >/dev/null
+    if [ "$DOCKER_PRESENT" -eq 1 ]; then
+      remove_iptables_rules DOCKER-USER
+    fi
     ;;
   ufw)
     # Remove ipshield rules from before.rules line-by-line (more robust than

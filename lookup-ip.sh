@@ -372,7 +372,12 @@ for i in "${!URLS[@]}"; do
   (
     curl "${CURL_OPTS[@]}" "${URLS[$i]}" -o "${TMP_DIR}/dl.${i}" 2>/dev/null
     if [ -n "$cache_file" ]; then
-      cp "${TMP_DIR}/dl.${i}" "$cache_file" 2>/dev/null || true
+      tmp_cache="${cache_file}.$$.tmp"
+      if cp "${TMP_DIR}/dl.${i}" "$tmp_cache" 2>/dev/null; then
+        mv "$tmp_cache" "$cache_file" 2>/dev/null || rm -f "$tmp_cache"
+      else
+        rm -f "$tmp_cache"
+      fi
     fi
   ) &
   DL_PIDS[i]="$!"

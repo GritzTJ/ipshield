@@ -125,6 +125,8 @@ docker_active() {
 docker_running_container_count() {
   if command -v docker >/dev/null 2>&1 && docker_daemon_active; then
     docker ps -q 2>/dev/null | wc -l | awk '{print $1}'
+  elif docker_daemon_active; then
+    echo "unknown"
   else
     echo 0
   fi
@@ -229,10 +231,10 @@ prepare_docker_firewall_transition() {
   if docker_active; then
     running_count="$(docker_running_container_count)"
     default_answer="no"
-    [ "$running_count" -eq 0 ] && default_answer="yes"
+    [[ "$running_count" =~ ^[0-9]+$ ]] && [ "$running_count" -eq 0 ] && default_answer="yes"
 
     log "Docker is active. Running containers detected: $running_count"
-    if [ "$running_count" -gt 0 ] && command -v docker >/dev/null 2>&1; then
+    if [[ "$running_count" =~ ^[0-9]+$ ]] && [ "$running_count" -gt 0 ] && command -v docker >/dev/null 2>&1; then
       log "Running containers:"
       docker ps --format '  - {{.Names}} ({{.Status}})' 2>/dev/null | sed -n '1,20p' || true
       log ""
@@ -240,13 +242,16 @@ prepare_docker_firewall_transition() {
       log "(for example: docker compose down), then rerun setup-firewall.sh."
       log "Letting this setup stop Docker only stops the Docker daemon; it is not"
       log "equivalent to a clean application/Compose shutdown."
+    elif [ "$running_count" = "unknown" ]; then
+      err "Docker daemon is active, but the docker CLI is unavailable."
+      err "Cannot determine whether containers are running; using the safe default: no."
     fi
 
     live_restore="false"
     if command -v docker >/dev/null 2>&1 && docker_daemon_active; then
       live_restore="$(docker info --format '{{.LiveRestoreEnabled}}' 2>/dev/null || echo false)"
     fi
-    if [ "$live_restore" = "true" ] && [ "$running_count" -gt 0 ]; then
+    if [ "$live_restore" = "true" ] && [[ "$running_count" =~ ^[0-9]+$ ]] && [ "$running_count" -gt 0 ]; then
       err "Docker live-restore is enabled and containers are running."
       err "Stop the containers first, then rerun setup-firewall.sh."
       exit 1
@@ -1082,6 +1087,7 @@ fi
 # --- Install new firewall ---
 log "Installing $FIREWALL package..."
 if [ "$PKG_MANAGER" = "apt" ]; then
+  export DEBIAN_FRONTEND=noninteractive
   apt update -qq
 fi
 # `ipset` and `curl` are installed alongside the firewall (dependencies of
@@ -1207,11 +1213,13 @@ case "$FIREWALL" in
 esac
 log "$FIREWALL is operational."
 
-restart_docker_after_firewall_transition || exit 1
-
-# Disarm the rollback - the new firewall is active
+# Disarm the rollback once the new firewall is confirmed operational. A later
+# Docker restart failure must not re-enable the old firewall on top of it.
 ROLLBACK_ARMED=0
 rm -f "${IPTABLES_BACKUP:-}" "${IPTABLES_BACKUP6:-}" 2>/dev/null || true
+
+restart_docker_after_firewall_transition || exit 1
+
 trap - EXIT INT TERM
 
 echo ""

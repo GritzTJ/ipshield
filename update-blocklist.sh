@@ -666,7 +666,7 @@ _whitelist_or_cleanup_firewalld() {
 
 _warn_hidden_docker_chains() {
   if docker_iptables_chains_present; then
-    err "Warning: Docker chains exist outside the current iptables backend; DOCKER-USER was not modified."
+    err "Warning: Docker chains exist, but DOCKER-USER is not available in the current backend; Docker rules were not modified."
   fi
   return 0
 }
@@ -851,7 +851,7 @@ flock -n 9 || { err "Error: another instance is already running."; exit 1; }
 # Repair ufw rules before network access. If ufw/iptables-nft failed during
 # boot because ipsets were missing, this can restore firewall state before curl
 # needs DNS responses.
-if [ "$DRY_RUN" -eq 0 ] && [ -f /etc/ufw/before.rules ]; then
+if [ "$DRY_RUN" -eq 0 ] && command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qE "^Status: active$" && [ -f /etc/ufw/before.rules ]; then
   _ufw_preflight_ipsets
 fi
 
@@ -1115,7 +1115,7 @@ ipset restore < "$TMP_FILE"
 ipset swap "$SET_NAME" "$TEMP_SET"
 ipset destroy "$TEMP_SET"
 
-total="$(ipset list -t "$SET_NAME" | awk -F': ' '/Number of entries/{print $2; exit}')"
+total="$(ipset list -t "$SET_NAME" 2>/dev/null | awk -F': ' '/Number of entries/{print $2; exit}')"
 log "Total blocked IPs: $(fmt_num "$total")"
 
 # --- Whitelist: atomic build/swap if non-empty ---

@@ -48,6 +48,7 @@ chmod 700 *.sh
 
 ```bash
 cp update-blocklist.conf.example /etc/update-blocklist.conf
+chown root:root /etc/update-blocklist.conf
 chmod 600 /etc/update-blocklist.conf
 ```
 
@@ -114,12 +115,14 @@ The script:
 
 Backend selection details:
 
-- Choosing **iptables** selects `iptables-legacy`/`ip6tables-legacy` via `update-alternatives` when those binaries are available.
-- Choosing **nftables** selects `iptables-nft`/`ip6tables-nft` via `update-alternatives` when those binaries are available, because the project applies nftables-path rules through iptables-nft to keep ipset matching support.
+- Choosing **iptables** selects `iptables-legacy`/`ip6tables-legacy` via `update-alternatives` on systems that provide it when those binaries are available.
+- Choosing **nftables** selects `iptables-nft`/`ip6tables-nft` via `update-alternatives` on systems that provide it when those binaries are available, because the project applies nftables-path rules through iptables-nft to keep ipset matching support.
+
+Security scope: ipshield installs blocklist rules. It does **not** turn direct `iptables`/`nftables` into a full default-deny firewall. On those paths, non-blacklisted traffic remains accepted unless you harden the host separately.
 
 Docker safety: if Docker iptables chains are present, `setup-firewall.sh` does not blindly modify the firewall. It offers a guided maintenance path: stop Docker, clean Docker-owned iptables/nft compatibility chains, continue the firewall transition or backend switch, then restart Docker. If containers are running, the prompt defaults to `no` because published ports and containers may be interrupted. In production, prefer stopping application stacks cleanly first (for example `docker compose down`), then rerun `setup-firewall.sh`; stopping the Docker daemon is not equivalent to a clean Compose/application shutdown. If Docker is active but no containers are running, the prompt defaults to `yes`.
 
-Ubuntu UFW note: `ufw.service` can be active/enabled even when `ufw status` is `inactive`. In that state UFW is not filtering traffic, but the service state is confusing when another firewall is selected. If `setup-firewall.sh` detects this while installing another firewall, it offers to run `systemctl disable --now ufw`.
+Ubuntu UFW note: `ufw.service` can be active/enabled even when `ufw status` is `inactive`. In that state UFW is not filtering traffic, but the service state is confusing when another firewall is selected. If `setup-firewall.sh` detects this while installing another firewall, it offers to run `systemctl disable --now ufw`. When transitioning away from active UFW, it also removes ipshield/orphan ipset lines from `/etc/ufw/before.rules` first, with a backup.
 
 #### Step 2: Run the blocker (first execution)
 
@@ -179,15 +182,17 @@ On the next run, the script:
 2. Inserts an `ACCEPT` rule at position 1 on `INPUT` (and `DOCKER-USER` if present)
 3. If `WHITELIST` is later emptied: the ACCEPT rule and the whitelist ipset are automatically removed on the next run
 
+The whitelist ipset name is `WHITELIST_SET_NAME` (`${SET_NAME}-allow` by default). It must use only `[a-zA-Z0-9_-]`, be 31 characters or less, and differ from `SET_NAME`.
+
 > **Warning**: the ACCEPT rule bypasses **the entire firewall**, not only the blocklist. A whitelisted IP has full server access regardless of other rules. Reserve for trusted IPs/subnets only.
 
 > **Anti-typo safeguard**: by default, any prefix < `/8` is rejected (`WHITELIST_MIN_PREFIX=8`). This blocks the classic `0.0.0.0/0` typo that would open the whole Internet to a total bypass. To allow a wider prefix, lower `WHITELIST_MIN_PREFIX` explicitly.
 
 #### Boot-time ipset persistence
 
-**Problem.** At server boot, the `ipset blacklist` (which lives in RAM) is empty unless it is restored from disk before the firewall starts. Until `update-blocklist.sh` runs via the `@reboot` cron, filtering does not work:
+**Problem.** At server boot, the `ipset blacklist` (which lives in RAM) is empty unless it is restored from disk before persistent firewall rules start. Until `update-blocklist.sh` runs via the `@reboot` cron, runtime-only rules are not re-applied:
 
-- **iptables / nftables**: rules are not persisted to disk by default → empty tables at boot, no filtering.
+- **iptables / nftables**: ipshield LOG/DROP rules are runtime rules and are not persisted to disk by default → fail-open until the `@reboot` cron re-applies them.
 - **ufw / firewalld with iptables-nft**: persistent rules may reference an ipset that does not exist yet. On modern Ubuntu/Debian this can make firewall reload/start fail with `Set <name> doesn't exist`.
 
 `ipshield` now supports first-class ipset persistence:
@@ -524,6 +529,7 @@ chmod 700 *.sh
 
 ```bash
 cp update-blocklist.conf.example /etc/update-blocklist.conf
+chown root:root /etc/update-blocklist.conf
 chmod 600 /etc/update-blocklist.conf
 ```
 
@@ -590,12 +596,14 @@ Le script :
 
 Détails de sélection du backend :
 
-- Le choix **iptables** sélectionne `iptables-legacy`/`ip6tables-legacy` via `update-alternatives` quand ces binaires sont disponibles.
-- Le choix **nftables** sélectionne `iptables-nft`/`ip6tables-nft` via `update-alternatives` quand ces binaires sont disponibles, car le projet applique les règles du chemin nftables via iptables-nft afin de conserver le support du match ipset.
+- Le choix **iptables** sélectionne `iptables-legacy`/`ip6tables-legacy` via `update-alternatives` sur les systèmes qui le fournissent quand ces binaires sont disponibles.
+- Le choix **nftables** sélectionne `iptables-nft`/`ip6tables-nft` via `update-alternatives` sur les systèmes qui le fournissent quand ces binaires sont disponibles, car le projet applique les règles du chemin nftables via iptables-nft afin de conserver le support du match ipset.
+
+Périmètre sécurité : ipshield installe des règles de blocklist. Il ne transforme pas `iptables`/`nftables` directs en firewall default-deny complet. Sur ces chemins, le trafic non blacklisté reste accepté sauf durcissement séparé de l'hôte.
 
 Sécurité Docker : si des chaînes iptables Docker sont présentes, `setup-firewall.sh` ne modifie pas le firewall à l'aveugle. Il propose un chemin de maintenance guidé : arrêter Docker, nettoyer les chaînes iptables/nft compatibility appartenant à Docker, continuer la transition firewall ou le changement de backend, puis redémarrer Docker. Si des conteneurs tournent, le prompt propose `no` par défaut car les ports publiés et les conteneurs peuvent être interrompus. En production, préférer arrêter proprement les stacks applicatives d'abord (par exemple `docker compose down`), puis relancer `setup-firewall.sh` ; arrêter le daemon Docker n'est pas équivalent à un arrêt propre Compose/applicatif. Si Docker est actif sans conteneur, le prompt propose `yes` par défaut.
 
-Note UFW Ubuntu : `ufw.service` peut être actif/enabled même lorsque `ufw status` vaut `inactive`. Dans cet état, UFW ne filtre pas le trafic, mais l'état du service peut prêter à confusion lorsqu'un autre firewall est sélectionné. Si `setup-firewall.sh` détecte ce cas pendant l'installation d'un autre firewall, il propose d'exécuter `systemctl disable --now ufw`.
+Note UFW Ubuntu : `ufw.service` peut être actif/enabled même lorsque `ufw status` vaut `inactive`. Dans cet état, UFW ne filtre pas le trafic, mais l'état du service peut prêter à confusion lorsqu'un autre firewall est sélectionné. Si `setup-firewall.sh` détecte ce cas pendant l'installation d'un autre firewall, il propose d'exécuter `systemctl disable --now ufw`. Lors d'une transition depuis UFW actif vers un autre firewall, il retire aussi les lignes ipshield/orphelines avec ipset de `/etc/ufw/before.rules` avant la désactivation, avec backup.
 
 #### Étape 2 : Lancer le blocage (première exécution)
 
@@ -655,15 +663,17 @@ Au prochain run, le script :
 2. Insère une règle `ACCEPT` en position 1 sur `INPUT` (et `DOCKER-USER` si présent)
 3. Si `WHITELIST` est ensuite vidé : la règle ACCEPT et l'ipset whitelist sont automatiquement retirés au prochain run
 
+Le nom de l'ipset whitelist est `WHITELIST_SET_NAME` (`${SET_NAME}-allow` par défaut). Il doit utiliser seulement `[a-zA-Z0-9_-]`, faire 31 caractères maximum, et être différent de `SET_NAME`.
+
 > **Attention** : la règle ACCEPT contourne **l'ensemble du filtrage firewall**, pas seulement la blocklist. Une IP whitelistée a un accès complet au serveur, indépendamment des autres règles. À réserver aux IP/subnets de confiance.
 
 > **Garde-fou anti-typo** : par défaut, tout préfixe < `/8` est refusé (`WHITELIST_MIN_PREFIX=8`). Cela bloque le piège classique d'un `0.0.0.0/0` accidentel qui ouvrirait tout Internet en bypass total. Pour autoriser un préfixe plus large, abaisser `WHITELIST_MIN_PREFIX` explicitement.
 
 #### Persistance ipset au reboot
 
-**Problème.** Au reboot du serveur, l'`ipset blacklist` (qui vit en RAM) est vide s'il n'est pas restauré depuis le disque avant le démarrage du firewall. Tant que `update-blocklist.sh` n'a pas tourné via la cron `@reboot`, le filtrage ne fonctionne pas :
+**Problème.** Au reboot du serveur, l'`ipset blacklist` (qui vit en RAM) est vide s'il n'est pas restauré depuis le disque avant le démarrage des règles firewall persistantes. Tant que `update-blocklist.sh` n'a pas tourné via la cron `@reboot`, les règles runtime seules ne sont pas réappliquées :
 
-- **iptables / nftables** : les règles ne sont pas persistées sur disque par défaut → tables vides au boot, aucun blocage.
+- **iptables / nftables** : les règles LOG/DROP ipshield sont des règles runtime et ne sont pas persistées sur disque par défaut → fail-open jusqu'à la réapplication par la cron `@reboot`.
 - **ufw / firewalld avec iptables-nft** : les règles persistantes peuvent référencer un ipset qui n'existe pas encore. Sur Ubuntu/Debian récents, cela peut faire échouer le reload/démarrage du firewall avec `Set <name> doesn't exist`.
 
 `ipshield` gère maintenant la persistance ipset nativement :

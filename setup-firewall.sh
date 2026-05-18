@@ -417,8 +417,8 @@ configure_cron() {
   reboot_delay=60
   read -rp "@reboot delay in seconds (lets Docker start) [$reboot_delay]: " ans
   if [ -n "$ans" ]; then
-    if ! [[ "$ans" =~ ^[0-9]+$ ]]; then
-      err "Invalid delay. Cron not configured."
+    if ! [[ "$ans" =~ ^[0-9]+$ ]] || [ "$ans" -gt 3600 ]; then
+      err "Invalid delay. Expected an integer between 0 and 3600 seconds. Cron not configured."
       return 0
     fi
     reboot_delay="$ans"
@@ -518,7 +518,7 @@ _install_config() {
 
 validate_root_config_file() {
   local path="$1"
-  local conf_owner conf_perms
+  local conf_owner conf_perms conf_low
 
   [ -f "$path" ] || return 0
   conf_owner="$(stat -c '%u' "$path")"
@@ -527,9 +527,57 @@ validate_root_config_file() {
     err "$path is not owned by root (uid=$conf_owner). Security risk."
     return 1
   fi
-  if [[ "$conf_perms" =~ [2367][0-9]$ ]] || [[ "$conf_perms" =~ [0-9][2367]$ ]]; then
+  conf_low="${conf_perms: -3}"
+  if (( (8#$conf_low & 8#022) != 0 )); then
     err "$path is group/world-writable (perms=$conf_perms). Security risk."
     return 1
+  fi
+}
+
+cleanup_ufw_ipshield_before_rules_for_transition() {
+  local rules_path="/etc/ufw/before.rules"
+  local snapshot="/etc/ufw/before.rules.ipshield-transition.bak"
+  local conf_path="/etc/update-blocklist.conf"
+  local set_name="blacklist"
+  local whitelist_set_name="blacklist-allow"
+  local ref_set before_count after_count
+  local sets_to_remove=()
+
+  [ -f "$rules_path" ] || return 0
+
+  if [ -f "$conf_path" ]; then
+    validate_root_config_file "$conf_path" || return 1
+    # shellcheck source=/dev/null
+    . "$conf_path"
+    set_name="${SET_NAME:-$set_name}"
+    whitelist_set_name="${WHITELIST_SET_NAME:-${set_name}-allow}"
+  fi
+
+  sets_to_remove+=("$set_name" "$whitelist_set_name")
+
+  if command -v ipset >/dev/null 2>&1; then
+    while read -r ref_set; do
+      [[ "$ref_set" =~ ^[a-zA-Z0-9_-]+$ ]] || continue
+      if ! ipset list -n 2>/dev/null | awk -v s="$ref_set" '$0==s{found=1} END{exit(found?0:1)}'; then
+        sets_to_remove+=("$ref_set")
+      fi
+    done < <(grep -oE -- "--match-set [^ ]+ src" "$rules_path" 2>/dev/null | awk '{print $2}' | sort -u)
+  fi
+
+  cp "$rules_path" "$snapshot"
+  before_count="$(wc -l < "$rules_path")"
+  for ref_set in "${sets_to_remove[@]}"; do
+    [ -n "$ref_set" ] || continue
+    [[ "$ref_set" =~ ^[a-zA-Z0-9_-]+$ ]] || continue
+    sed -i "\\|^-A ufw-before-input .*--match-set $ref_set src |d" "$rules_path"
+  done
+  after_count="$(wc -l < "$rules_path")"
+
+  if [ "$before_count" != "$after_count" ]; then
+    UFW_TRANSITION_BACKUP="$snapshot"
+    log "Removed ipshield/orphan ipset rules from $rules_path (backup: $snapshot)."
+  else
+    rm -f "$snapshot"
   fi
 }
 
@@ -792,6 +840,10 @@ fi
 echo ""
 log "Choose the firewall to install and enable:"
 echo ""
+log "Security note:"
+log "  ipshield installs blocklist rules; it is not a full default-deny firewall."
+log "  On iptables/nftables, non-blacklisted traffic stays accepted unless you harden the host separately."
+echo ""
 log "Recommendation:"
 log "  - Ubuntu/Debian production server: nftables"
 log "  - Fedora/RHEL-family production server: firewalld"
@@ -1012,6 +1064,10 @@ rollback() {
         if systemctl start firewalld 2>/dev/null; then log "firewalld re-enabled."
         else err "cannot re-enable firewalld."; fi ;;
       ufw)
+        if [ -n "${UFW_TRANSITION_BACKUP:-}" ] && [ -f "$UFW_TRANSITION_BACKUP" ]; then
+          cp "$UFW_TRANSITION_BACKUP" /etc/ufw/before.rules
+          log "ufw before.rules restored from transition backup."
+        fi
         if ufw --force enable 2>/dev/null; then log "ufw re-enabled."
         else err "cannot re-enable ufw."; fi ;;
       nftables)
@@ -1053,6 +1109,7 @@ if [ "$DETECTED" != "none" ]; then
       systemctl disable firewalld
       ;;
     ufw)
+      cleanup_ufw_ipshield_before_rules_for_transition
       ufw disable
       ;;
     nftables)
@@ -1205,7 +1262,7 @@ case "$FIREWALL" in
     fi
     ;;
   ufw)
-    if ! ufw status 2>/dev/null | grep -qi "^Status: active"; then
+    if ! ufw status 2>/dev/null | grep -qE "^Status: active$"; then
       err "ufw not active after --force enable."
       exit 1
     fi

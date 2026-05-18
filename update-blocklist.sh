@@ -2,6 +2,7 @@
 # ipshield v1.0.0
 set -euo pipefail
 umask 077
+export LC_ALL=C
 
 # Cron on Debian/Ubuntu typically runs with PATH=/usr/bin:/bin, which omits
 # /sbin and /usr/sbin where ipset, iptables, ip6tables, nft and ip live.
@@ -74,7 +75,8 @@ if [ "$conf_owner" != "0" ]; then
   echo "Error: $CONF_FILE is not owned by root (uid=$conf_owner). Security risk." >&2
   exit 1
 fi
-if [[ "$conf_perms" =~ [2367][0-9]$ ]] || [[ "$conf_perms" =~ [0-9][2367]$ ]]; then
+conf_low="${conf_perms: -3}"
+if (( (8#$conf_low & 8#022) != 0 )); then
   echo "Error: $CONF_FILE is group/world-writable (perms=$conf_perms). Security risk." >&2
   exit 1
 fi
@@ -168,6 +170,11 @@ fi
 if [ -n "$WAN_INTERFACE" ] && [[ ! "$WAN_INTERFACE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
   echo "Error: WAN_INTERFACE invalid ('$WAN_INTERFACE')." >&2
   exit 1
+fi
+if [ "$WAN_INTERFACE" = "lo" ]; then
+  echo "Warning: WAN_INTERFACE=lo detected; Docker inbound filtering would be ineffective." >&2
+  echo "  Set WAN_INTERFACE explicitly in $CONF_FILE, or leave it empty to filter Docker ingress on all interfaces." >&2
+  WAN_INTERFACE=""
 fi
 
 # --- ipset persistence validation ---
@@ -1128,13 +1135,17 @@ if [ "${#WHITELIST[@]}" -gt 0 ]; then
   wl_entries="$(wc -l < "$WL_FILE")"
   wl_maxelem=$(( wl_entries + 100 ))
   [ "$wl_maxelem" -lt 256 ] && wl_maxelem=256
+  wl_hashsize=1024
+  while [ "$wl_hashsize" -lt "$(( (wl_entries + 3) / 4 ))" ]; do
+    wl_hashsize=$((wl_hashsize * 2))
+  done
   {
-    echo "create $WL_TEMP_SET $IPSET_TYPE family $IPSET_FAMILY hashsize 1024 maxelem $wl_maxelem"
+    echo "create $WL_TEMP_SET $IPSET_TYPE family $IPSET_FAMILY hashsize $wl_hashsize maxelem $wl_maxelem"
     awk -v set="$WL_TEMP_SET" '{print "add " set " " $1 " -exist"}' "$WL_FILE"
   } > "$WL_TMP_FILE"
 
   if [ "$WL_SET_EXISTS" -eq 0 ]; then
-    ipset create "$WHITELIST_SET_NAME" "$IPSET_TYPE" family "$IPSET_FAMILY" hashsize 1024 maxelem "$wl_maxelem"
+    ipset create "$WHITELIST_SET_NAME" "$IPSET_TYPE" family "$IPSET_FAMILY" hashsize "$wl_hashsize" maxelem "$wl_maxelem"
     WL_SET_EXISTS=1
   fi
   ipset destroy "$WL_TEMP_SET" 2>/dev/null || true
@@ -1143,6 +1154,11 @@ if [ "${#WHITELIST[@]}" -gt 0 ]; then
   ipset destroy "$WL_TEMP_SET"
   log "Whitelist active: $(fmt_num "$wl_entries") entry(ies) in $WHITELIST_SET_NAME."
 fi
+
+# Save persistence before applying firewall rules: the ipsets are already valid
+# and atomically swapped; firewall application can fail independently.
+_save_persistent_ipsets
+PERSISTENCE_REFRESH_NEEDED=0
 
 # --- Firewall rules check / apply ---
 DETECTED_FW="$(detect_firewall)"
@@ -1162,9 +1178,12 @@ fi
 if [ "${#WHITELIST[@]}" -eq 0 ] && [ "$WL_SET_EXISTS" -eq 1 ]; then
   if ipset destroy "$WHITELIST_SET_NAME" 2>/dev/null; then
     log "Empty whitelist: ipset $WHITELIST_SET_NAME destroyed."
+    PERSISTENCE_REFRESH_NEEDED=1
   else
     err "Warning: cannot destroy $WHITELIST_SET_NAME (still referenced?)."
   fi
 fi
 
-_save_persistent_ipsets
+if [ "$PERSISTENCE_REFRESH_NEEDED" -eq 1 ]; then
+  _save_persistent_ipsets
+fi

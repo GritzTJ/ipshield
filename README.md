@@ -28,9 +28,10 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 - **11 curated public IPv4 blocklists** aggregated into a single ipset (Spamhaus, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, Tor exits, Internet Scanner ranges)
 - **RFC 6890 bogon filter**: rejects RFC1918, loopback, link-local, multicast and other reserved ranges from upstream sources to prevent self-blocking the LAN or Docker bridge
 - **Four supported firewalls**: iptables, nftables, firewalld, ufw — auto-detected and applied idempotently
+- **Blocklist-focused protection**: ipshield is not a full default-deny firewall; with direct iptables/nftables, non-blacklisted traffic remains accepted unless you harden the host separately
 - **Docker-aware**: inbound-only protection of the `DOCKER-USER` chain, scoped to the WAN interface (container egress is never filtered); firewalld systems use runtime `DOCKER-USER` rules so Docker boot ordering cannot break firewalld
 - **Docker-safe setup**: firewall transitions and iptables backend switches offer a guided maintenance path when Docker chains are present, while recommending a clean application/Compose shutdown first if containers are running
-- **UFW-aware setup**: when another firewall is selected, inactive UFW rules with an active/enabled `ufw.service` are detected and can be disabled to avoid ambiguous post-install checks
+- **UFW-aware setup**: inactive UFW service state is detected, and transitions away from UFW clean ipshield/orphan ipset lines from `before.rules`
 - **Whitelist** of trusted IPs/subnets (management, jump hosts) with prefix-width safeguard against accidental `0.0.0.0/0`
 - **Zero-downtime updates** via atomic ipset swap
 - **Boot-safe ipset persistence** for persistent firewalls (`ufw`, `firewalld`, `nftables`)
@@ -153,9 +154,10 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 - **11 listes publiques d'IPv4 malveillantes** agrégées dans un seul ipset (Spamhaus, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, nœuds de sortie Tor, ranges de scanners Internet)
 - **Filtre des bogons RFC 6890** : rejette RFC1918, loopback, link-local, multicast et autres plages réservées issues des sources externes, afin d'éviter d'auto-bloquer le LAN ou le bridge Docker
 - **Quatre firewalls supportés** : iptables, nftables, firewalld, ufw — détection automatique et application idempotente des règles
+- **Protection centrée blocklist** : ipshield n'est pas un firewall default-deny complet ; avec iptables/nftables directs, le trafic non blacklisté reste accepté sauf durcissement séparé de l'hôte
 - **Compatible Docker** : protection de la chaîne `DOCKER-USER` en entrée uniquement, scopée à l'interface WAN (l'egress des conteneurs n'est jamais filtré) ; avec firewalld, les règles `DOCKER-USER` restent runtime pour ne pas casser firewalld au boot si Docker n'a pas encore créé la chaîne
 - **Setup compatible Docker** : les transitions firewall et changements de backend iptables proposent un chemin de maintenance guidé lorsque des chaînes Docker sont présentes, en recommandant d'abord un arrêt propre applicatif/Compose si des conteneurs tournent
-- **Setup conscient d'UFW** : lorsqu'un autre firewall est sélectionné, un `ufw.service` actif/enabled avec des règles UFW inactives est détecté et peut être désactivé pour éviter les vérifications ambiguës après installation
+- **Setup conscient d'UFW** : l'état de service UFW inactif est détecté, et les transitions hors UFW nettoient les lignes ipshield/orphelines avec ipset dans `before.rules`
 - **Whitelist** d'IP/subnets de confiance (management, bastions) avec garde-fou de préfixe pour empêcher un `0.0.0.0/0` accidentel
 - **Mise à jour sans interruption** par swap atomique d'ipset
 - **Persistance ipset au boot** pour les firewalls persistants (`ufw`, `firewalld`, `nftables`)

@@ -147,6 +147,16 @@ if ! [[ "$BLOCKLIST_MIN_PREFIX" =~ ^[0-9]+$ ]] || [ "$BLOCKLIST_MIN_PREFIX" -lt 
   exit 1
 fi
 
+# --- LOOKUP_CACHE_TTL validation ---
+# The variable is consumed by lookup-ip.sh, but this script sources the same
+# config file. Validate it here too so typos in /etc/update-blocklist.conf are
+# caught during the regular scheduled run.
+: "${LOOKUP_CACHE_TTL:=21600}"
+if ! [[ "$LOOKUP_CACHE_TTL" =~ ^[0-9]+$ ]]; then
+  echo "Error: LOOKUP_CACHE_TTL invalid ('$LOOKUP_CACHE_TTL'). Integer seconds expected." >&2
+  exit 1
+fi
+
 # --- LOG_LIMIT / LOG_BURST validation ---
 # Empty LOG_LIMIT = log everything (no rate-limit)
 : "${LOG_LIMIT=60/min}"
@@ -344,19 +354,51 @@ _firewalld_get_all_direct_rules() {
 
 _firewalld_parse_direct_rule_line() {
   local line="$1"
-  local placeholder="__IPSHIELD_BLOCKED_PREFIX__"
-  local i
+  local token=""
+  local quote=""
+  local char next
+  local i=0
+  local len=${#line}
 
   FIREWALLD_DIRECT_RULE_ARGS=()
-  line="${line//--log-prefix 'BLOCKED: '/--log-prefix $placeholder }"
-  line="${line//--log-prefix \"BLOCKED: \"/--log-prefix $placeholder }"
-  read -r -a FIREWALLD_DIRECT_RULE_ARGS <<< "$line"
-
-  for i in "${!FIREWALLD_DIRECT_RULE_ARGS[@]}"; do
-    if [ "${FIREWALLD_DIRECT_RULE_ARGS[$i]}" = "$placeholder" ]; then
-      FIREWALLD_DIRECT_RULE_ARGS[i]="BLOCKED: "
+  while [ "$i" -lt "$len" ]; do
+    char="${line:i:1}"
+    if [ -n "$quote" ]; then
+      if [ "$char" = "$quote" ]; then
+        quote=""
+      elif [ "$quote" = '"' ] && [ "$char" = "\\" ] && [ $((i + 1)) -lt "$len" ]; then
+        next="${line:i+1:1}"
+        token+="$next"
+        i=$((i + 1))
+      else
+        token+="$char"
+      fi
+    else
+      case "$char" in
+        "'"|'"') quote="$char" ;;
+        [[:space:]])
+          if [ -n "$token" ]; then
+            FIREWALLD_DIRECT_RULE_ARGS+=("$token")
+            token=""
+          fi
+          ;;
+        "\\")
+          if [ $((i + 1)) -lt "$len" ]; then
+            next="${line:i+1:1}"
+            token+="$next"
+            i=$((i + 1))
+          else
+            token+="$char"
+          fi
+          ;;
+        *) token+="$char" ;;
+      esac
     fi
+    i=$((i + 1))
   done
+  if [ -n "$token" ]; then
+    FIREWALLD_DIRECT_RULE_ARGS+=("$token")
+  fi
 }
 
 _firewalld_remove_direct_rule() {
@@ -373,7 +415,7 @@ _firewalld_remove_set_rules_with_reload_hint() {
   local chain="$1"
   local set="$2"
   local line
-  local removed=1
+  local changed=0
   while true; do
     line="$(_firewalld_get_all_direct_rules \
       | grep -E "^ipv4 filter $chain .*--match-set $set src" \
@@ -385,11 +427,17 @@ _firewalld_remove_set_rules_with_reload_hint() {
       # If at least one previous removal succeeded, the caller still needs to
       # reload/restart firewalld so runtime state matches the changed permanent
       # config as closely as possible.
-      return "$removed"
+      if [ "$changed" -eq 1 ]; then
+        return 0
+      fi
+      return 1
     fi
-    removed=0
+    changed=1
   done
-  return "$removed"
+  if [ "$changed" -eq 1 ]; then
+    return 0
+  fi
+  return 1
 }
 
 _firewalld_reload_or_restart() {
@@ -641,7 +689,10 @@ _apply_iptables_rules() {
     actioned=1
   fi
 
-  [ "$actioned" -eq 1 ] && return 0 || return 1
+  if [ "$actioned" -eq 1 ]; then
+    return 0
+  fi
+  return 1
 }
 
 # --- Idempotent insertion of the whitelist ACCEPT rule at position 1 ---
@@ -964,7 +1015,7 @@ function valid_ipv4(ip,   n,i,o) {
   return 1;
 }
 function valid_cidr(p) {
-  if (p !~ /^[0-9]{1,2}$/) return 0;
+  if (p !~ /^(0|[1-9][0-9]?)$/) return 0;
   return (p+0 >= 0 && p+0 <= 32);
 }
 # Reject reserved ranges (RFC 6890) that should never appear in a public

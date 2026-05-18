@@ -245,19 +245,51 @@ firewalld_get_all_direct_rules() {
 
 firewalld_parse_direct_rule_line() {
   local line="$1"
-  local placeholder="__IPSHIELD_BLOCKED_PREFIX__"
-  local i
+  local token=""
+  local quote=""
+  local char next
+  local i=0
+  local len=${#line}
 
   FIREWALLD_DIRECT_RULE_ARGS=()
-  line="${line//--log-prefix 'BLOCKED: '/--log-prefix $placeholder }"
-  line="${line//--log-prefix \"BLOCKED: \"/--log-prefix $placeholder }"
-  read -r -a FIREWALLD_DIRECT_RULE_ARGS <<< "$line"
-
-  for i in "${!FIREWALLD_DIRECT_RULE_ARGS[@]}"; do
-    if [ "${FIREWALLD_DIRECT_RULE_ARGS[$i]}" = "$placeholder" ]; then
-      FIREWALLD_DIRECT_RULE_ARGS[i]="BLOCKED: "
+  while [ "$i" -lt "$len" ]; do
+    char="${line:i:1}"
+    if [ -n "$quote" ]; then
+      if [ "$char" = "$quote" ]; then
+        quote=""
+      elif [ "$quote" = '"' ] && [ "$char" = "\\" ] && [ $((i + 1)) -lt "$len" ]; then
+        next="${line:i+1:1}"
+        token+="$next"
+        i=$((i + 1))
+      else
+        token+="$char"
+      fi
+    else
+      case "$char" in
+        "'"|'"') quote="$char" ;;
+        [[:space:]])
+          if [ -n "$token" ]; then
+            FIREWALLD_DIRECT_RULE_ARGS+=("$token")
+            token=""
+          fi
+          ;;
+        "\\")
+          if [ $((i + 1)) -lt "$len" ]; then
+            next="${line:i+1:1}"
+            token+="$next"
+            i=$((i + 1))
+          else
+            token+="$char"
+          fi
+          ;;
+        *) token+="$char" ;;
+      esac
     fi
+    i=$((i + 1))
   done
+  if [ -n "$token" ]; then
+    FIREWALLD_DIRECT_RULE_ARGS+=("$token")
+  fi
 }
 
 firewalld_remove_direct_rule() {
@@ -287,7 +319,10 @@ remove_firewalld_rules() {
     fi
     changed=1
   done
-  [ "$changed" -eq 1 ] && return 0 || return 1
+  if [ "$changed" -eq 1 ]; then
+    return 0
+  fi
+  return 1
 }
 
 # --- Display existing ipshield rules ---

@@ -240,7 +240,7 @@ function valid_ipv4(ip,   n,i,o) {
   return 1;
 }
 function valid_cidr(p) {
-  if (p !~ /^[0-9]{1,2}$/) return 0;
+  if (p !~ /^(0|[1-9][0-9]?)$/) return 0;
   return (p+0 >= 0 && p+0 <= 32);
 }
 # Reject reserved ranges (RFC 6890) that should never appear in a public

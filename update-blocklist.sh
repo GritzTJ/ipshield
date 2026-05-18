@@ -290,6 +290,11 @@ detect_firewall() {
       echo "iptables"
       return
     fi
+    # ufw service inactive but legacy ufw-* chains still present alongside
+    # direct iptables rules. Refuse to apply iptables rules silently: the
+    # operator should disable ufw cleanly or rerun setup-firewall.sh.
+    err "Warning: iptables rules detected but ufw-* chains remain; refusing to apply rules to avoid drift."
+    err "  Run setup-firewall.sh to disable the inactive ufw service or pick a coherent backend."
   fi
 
   echo "none"
@@ -302,7 +307,7 @@ detect_docker() {
 
 docker_iptables_chains_present() {
   local bin
-  for bin in iptables iptables-nft iptables-legacy; do
+  for bin in iptables iptables-nft iptables-legacy ip6tables ip6tables-nft ip6tables-legacy; do
     command -v "$bin" >/dev/null 2>&1 || continue
     "$bin" -t nat -S DOCKER >/dev/null 2>&1 && return 0
     "$bin" -S DOCKER-USER >/dev/null 2>&1 && return 0

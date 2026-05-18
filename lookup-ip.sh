@@ -83,7 +83,8 @@ if [ "$(id -u)" -eq 0 ]; then
     echo "Error: $CONF_FILE is not owned by root (uid=$conf_owner). Security risk." >&2
     exit 1
   fi
-  if [[ "$conf_perms" =~ [2367][0-9]$ ]] || [[ "$conf_perms" =~ [0-9][2367]$ ]]; then
+  conf_low="${conf_perms: -3}"
+  if (( (8#$conf_low & 8#022) != 0 )); then
     echo "Error: $CONF_FILE is group/world-writable (perms=$conf_perms). Security risk." >&2
     exit 1
   fi

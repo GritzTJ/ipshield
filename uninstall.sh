@@ -68,7 +68,8 @@ if [ -f "$CONF_FILE" ]; then
     echo "Error: $CONF_FILE is not owned by root (uid=$conf_owner)." >&2
     exit 1
   fi
-  if [[ "$conf_perms" =~ [2367][0-9]$ ]] || [[ "$conf_perms" =~ [0-9][2367]$ ]]; then
+  conf_low="${conf_perms: -3}"
+  if (( (8#$conf_low & 8#022) != 0 )); then
     echo "Error: $CONF_FILE is group/world-writable (perms=$conf_perms)." >&2
     exit 1
   fi
@@ -195,7 +196,7 @@ detect_docker() {
 
 docker_iptables_chains_present() {
   local bin
-  for bin in iptables iptables-nft iptables-legacy; do
+  for bin in iptables iptables-nft iptables-legacy ip6tables ip6tables-nft ip6tables-legacy; do
     command -v "$bin" >/dev/null 2>&1 || continue
     "$bin" -t nat -S DOCKER >/dev/null 2>&1 && return 0
     "$bin" -S DOCKER-USER >/dev/null 2>&1 && return 0
@@ -576,6 +577,36 @@ if [ -f "$restore_service" ]; then
     log "ipshield-restore.service removed."
   else
     log "ipshield-restore.service kept."
+  fi
+fi
+
+# --- Optional safe-ports service + config removal ---
+safe_ports_service="/etc/systemd/system/ipshield-safe-ports.service"
+safe_ports_files=()
+[ -f /etc/ipshield/safe-ports.nft ] && safe_ports_files+=("/etc/ipshield/safe-ports.nft")
+[ -f /etc/ipshield/safe-ports.v4 ] && safe_ports_files+=("/etc/ipshield/safe-ports.v4")
+if [ -f "$safe_ports_service" ] || [ "${#safe_ports_files[@]}" -gt 0 ]; then
+  echo ""
+  log "ipshield safe-ports persistence found:"
+  [ -f "$safe_ports_service" ] && echo "    $safe_ports_service"
+  for f in "${safe_ports_files[@]}"; do
+    echo "    $f"
+  done
+  log "Note: removing these does NOT close already-open ports in the running"
+  log "firewall; it only stops them from being reapplied at the next boot."
+  if ask_yes_no "Disable and remove the safe-ports persistence?" yes; then
+    if [ -f "$safe_ports_service" ]; then
+      systemctl disable --now ipshield-safe-ports.service 2>/dev/null || true
+      rm -f "$safe_ports_service"
+      systemctl daemon-reload 2>/dev/null || true
+    fi
+    for f in "${safe_ports_files[@]}"; do
+      rm -f "$f"
+    done
+    rmdir /etc/ipshield 2>/dev/null || true
+    log "Safe-ports persistence removed."
+  else
+    log "Safe-ports persistence kept."
   fi
 fi
 

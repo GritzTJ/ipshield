@@ -103,7 +103,7 @@ These sources are customisable via the `URLS` variable in `/etc/update-blocklist
 The script:
 1. Detects the active firewall (firewalld, ufw, nftables or iptables)
 2. Offers a menu with the 4 options
-3. Auto-detects listening TCP/UDP ports (non-loopback) and offers to open them before activation (anti-lockout)
+3. Auto-detects listening TCP/UDP ports (non-loopback) and offers to open them before activation (anti-lockout). The prompt is **skipped** when the chosen firewall has a permissive INPUT policy (ACCEPT by default — common case on fresh Debian/Ubuntu with iptables/nftables): adding ACCEPT rules would be no-ops. When the firewall is deny-by-default (ufw, firewalld, or a hardened iptables/nftables), the prompt is shown and the resulting ports are persisted via `ipshield-safe-ports.service` (a systemd unit ordered before sshd/docker so admin access is restored at boot).
 4. Disables the previous firewall if a different one is chosen (with automatic rollback on failure)
 5. Installs and enables the new firewall
 6. Verifies the firewall responds after activation (otherwise rolls back)
@@ -121,6 +121,8 @@ Backend selection details:
 Security scope: ipshield installs blocklist rules. It does **not** turn direct `iptables`/`nftables` into a full default-deny firewall. On those paths, non-blacklisted traffic remains accepted unless you harden the host separately.
 
 Docker safety: if Docker iptables chains are present, `setup-firewall.sh` does not blindly modify the firewall. It offers a guided maintenance path: stop Docker, clean Docker-owned iptables/nft compatibility chains, continue the firewall transition or backend switch, then restart Docker. If containers are running, the prompt defaults to `no` because published ports and containers may be interrupted. In production, prefer stopping application stacks cleanly first (for example `docker compose down`), then rerun `setup-firewall.sh`; stopping the Docker daemon is not equivalent to a clean Compose/application shutdown. If Docker is active but no containers are running, the prompt defaults to `yes`.
+
+Docker-friendly transitions: when the transition is provably non-destructive — target firewall is `iptables` or `nftables`, no previous firewall has to be deactivated (`DETECTED=none`), and the iptables backend already matches the chosen target — `setup-firewall.sh` **skips the Docker stop entirely** and leaves running containers online. For the `nftables` choice, `/etc/nftables.conf` is patched in-place (with backup `.ipshield.bak`) to comment out `flush ruleset`, so `systemctl start nftables` does not wipe the iptables-nft rules Docker maintains in-kernel. The destructive transitions (existing iptables flush, backend switch, ufw or firewalld activation) still go through the guided Docker stop path.
 
 Ubuntu UFW note: `ufw.service` can be active/enabled even when `ufw status` is `inactive`. In that state UFW is not filtering traffic, but the service state is confusing when another firewall is selected. If `setup-firewall.sh` detects this while installing another firewall, it offers to run `systemctl disable --now ufw`. When transitioning away from active UFW, it also removes ipshield/orphan ipset lines from `/etc/ufw/before.rules` first, with a backup.
 
@@ -584,7 +586,7 @@ Le script `setup-firewall.sh` détecte, installe et active un firewall sur le sy
 Le script :
 1. Détecte le firewall actif (firewalld, ufw, nftables ou iptables)
 2. Propose un menu avec les 4 options
-3. Détecte automatiquement les ports TCP/UDP en écoute (non-loopback) et propose de les ouvrir avant activation (protection anti-lockout)
+3. Détecte automatiquement les ports TCP/UDP en écoute (non-loopback) et propose de les ouvrir avant activation (protection anti-lockout). Le prompt est **sauté** quand le firewall choisi a une politique INPUT permissive (ACCEPT par défaut — cas commun sur Debian/Ubuntu fraîchement installé avec iptables/nftables) : ajouter des ACCEPT serait sans effet. Quand le firewall est deny-by-default (ufw, firewalld, ou iptables/nftables durci), le prompt est affiché et les ports résultants sont persistés via `ipshield-safe-ports.service` (unit systemd ordonné avant sshd/docker pour que l'accès admin soit rétabli au boot).
 4. Désactive l'ancien firewall si un autre est choisi (avec rollback automatique en cas d'échec)
 5. Installe et active le nouveau firewall
 6. Vérifie que le firewall répond après activation (sinon rollback)
@@ -602,6 +604,8 @@ Détails de sélection du backend :
 Périmètre sécurité : ipshield installe des règles de blocklist. Il ne transforme pas `iptables`/`nftables` directs en firewall default-deny complet. Sur ces chemins, le trafic non blacklisté reste accepté sauf durcissement séparé de l'hôte.
 
 Sécurité Docker : si des chaînes iptables Docker sont présentes, `setup-firewall.sh` ne modifie pas le firewall à l'aveugle. Il propose un chemin de maintenance guidé : arrêter Docker, nettoyer les chaînes iptables/nft compatibility appartenant à Docker, continuer la transition firewall ou le changement de backend, puis redémarrer Docker. Si des conteneurs tournent, le prompt propose `no` par défaut car les ports publiés et les conteneurs peuvent être interrompus. En production, préférer arrêter proprement les stacks applicatives d'abord (par exemple `docker compose down`), puis relancer `setup-firewall.sh` ; arrêter le daemon Docker n'est pas équivalent à un arrêt propre Compose/applicatif. Si Docker est actif sans conteneur, le prompt propose `yes` par défaut.
+
+Transitions non disruptives pour Docker : quand la transition est démontrée non destructrice — firewall cible `iptables` ou `nftables`, aucun firewall précédent à désactiver (`DETECTED=none`), et backend iptables déjà aligné sur la cible — `setup-firewall.sh` **saute complètement l'arrêt Docker** et laisse les conteneurs en ligne. Pour le choix `nftables`, `/etc/nftables.conf` est patché sur place (backup `.ipshield.bak`) pour commenter `flush ruleset`, afin que `systemctl start nftables` ne vide pas les règles iptables-nft que Docker maintient en kernel. Les transitions destructrices (flush d'iptables existant, changement de backend, activation ufw ou firewalld) passent toujours par le chemin de stop Docker guidé.
 
 Note UFW Ubuntu : `ufw.service` peut être actif/enabled même lorsque `ufw status` vaut `inactive`. Dans cet état, UFW ne filtre pas le trafic, mais l'état du service peut prêter à confusion lorsqu'un autre firewall est sélectionné. Si `setup-firewall.sh` détecte ce cas pendant l'installation d'un autre firewall, il propose d'exécuter `systemctl disable --now ufw`. Lors d'une transition depuis UFW actif vers un autre firewall, il retire aussi les lignes ipshield/orphelines avec ipset de `/etc/ufw/before.rules` avant la désactivation, avec backup.
 

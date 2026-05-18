@@ -1128,18 +1128,21 @@ firewall_input_is_default_deny() {
       ;;
     nftables)
       # Prefer the runtime ruleset if available (it reflects what is actually
-      # enforced); fall back to /etc/nftables.conf otherwise.
+      # enforced); fall back to /etc/nftables.conf otherwise. The awk omits
+      # `next` after `hook input` so a one-line chain such as
+      # `chain input { type filter hook input ... ; policy drop ; }` is also
+      # detected (the same line carries both the hook marker and the policy).
       if systemctl is-active --quiet nftables 2>/dev/null; then
         nft list ruleset 2>/dev/null | awk '
-          /hook input/ { in_input=1; next }
-          in_input && /^[[:space:]]*}/ { in_input=0; next }
+          /hook input/ { in_input=1 }
+          in_input && /^[[:space:]]*}/ { in_input=0 }
           in_input && /policy (drop|reject)/ { found=1 }
           END { exit(found?0:1) }
         '
       elif [ -f /etc/nftables.conf ]; then
         awk '
-          /hook input/ { in_input=1; next }
-          in_input && /^[[:space:]]*}/ { in_input=0; next }
+          /hook input/ { in_input=1 }
+          in_input && /^[[:space:]]*}/ { in_input=0 }
           in_input && /policy (drop|reject)/ { found=1 }
           END { exit(found?0:1) }
         ' /etc/nftables.conf

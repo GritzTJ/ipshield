@@ -506,6 +506,48 @@ _ufw_preflight_ipsets() {
   fi
 }
 
+_ufw_preflight_ipsets_dry_run() {
+  [ -f /etc/ufw/before.rules ] || return 0
+
+  local ref_set
+  local actions=0
+  local refs=0
+
+  while IFS= read -r ref_set; do
+    [ -z "$ref_set" ] && continue
+    refs=1
+    case "$ref_set" in
+      "$SET_NAME")
+        if ! _ipset_exists "$SET_NAME"; then
+          log "[DRY-RUN] ufw preflight: missing ipset $SET_NAME would be created before firewall reload."
+          actions=1
+        fi
+        ;;
+      "$WHITELIST_SET_NAME")
+        if [ "${#WHITELIST[@]}" -gt 0 ]; then
+          if ! _ipset_exists "$WHITELIST_SET_NAME"; then
+            log "[DRY-RUN] ufw preflight: missing ipset $WHITELIST_SET_NAME would be created before firewall reload."
+            actions=1
+          fi
+        else
+          log "[DRY-RUN] ufw preflight: inactive whitelist rule(s) for $WHITELIST_SET_NAME would be removed from before.rules."
+          actions=1
+        fi
+        ;;
+      *)
+        if ! _ipset_exists "$ref_set"; then
+          log "[DRY-RUN] ufw preflight: orphan rule(s) referencing missing ipset $ref_set would be removed from before.rules."
+          actions=1
+        fi
+        ;;
+    esac
+  done < <(_ufw_referenced_sets)
+
+  if [ "$refs" -eq 1 ] && [ "$actions" -eq 0 ]; then
+    log "[DRY-RUN] ufw preflight: no missing or inactive ipset reference detected."
+  fi
+}
+
 _ufw_snapshot_before_rules() {
   local snapshot="$1"
   cp /etc/ufw/before.rules /etc/ufw/before.rules.ipshield.bak
@@ -858,8 +900,12 @@ flock -n 9 || { err "Error: another instance is already running."; exit 1; }
 # Repair ufw rules before network access. If ufw/iptables-nft failed during
 # boot because ipsets were missing, this can restore firewall state before curl
 # needs DNS responses.
-if [ "$DRY_RUN" -eq 0 ] && command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qE "^Status: active$" && [ -f /etc/ufw/before.rules ]; then
-  _ufw_preflight_ipsets
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qE "^Status: active$" && [ -f /etc/ufw/before.rules ]; then
+  if [ "$DRY_RUN" -eq 1 ]; then
+    _ufw_preflight_ipsets_dry_run
+  else
+    _ufw_preflight_ipsets
+  fi
 fi
 
 # --- HTTP source warning ---

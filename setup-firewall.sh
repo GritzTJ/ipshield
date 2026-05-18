@@ -799,6 +799,45 @@ configure_logs() {
   fi
 }
 
+extract_nft_admin_access_ports() {
+  nft list chain inet admin_access input 2>/dev/null | awk '
+    / accept/ && /(tcp|udp)[[:space:]]+dport/ {
+      proto = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i == "tcp" || $i == "udp") {
+          proto = $i
+          break
+        }
+      }
+      if (proto == "") next
+
+      for (i = 1; i <= NF; i++) {
+        if ($i != "dport") continue
+
+        if ($(i + 1) ~ /^\{/) {
+          for (j = i + 1; j <= NF; j++) {
+            token = $j
+            done = (token ~ /}/)
+            gsub(/[{}]/, "", token)
+            n = split(token, ports, ",")
+            for (k = 1; k <= n; k++) {
+              if (ports[k] ~ /^[0-9]+$/) print ports[k] "/" proto
+            }
+            if (done) break
+          }
+        } else {
+          token = $(i + 1)
+          gsub(/[{}]/, "", token)
+          n = split(token, ports, ",")
+          for (k = 1; k <= n; k++) {
+            if (ports[k] ~ /^[0-9]+$/) print ports[k] "/" proto
+          }
+        }
+      }
+    }
+  ' | sort -t/ -k1,1n -k2,2 -u | tr '\n' ' ' | sed 's/ *$//'
+}
+
 # --- Migration: legacy nftables admin_access chain priority bug ---
 # Before this fix, the 'inet admin_access input' chain was created at priority -10
 # (before the blocklist at priority 0). Result: on nftables, blacklisted IPs still
@@ -811,9 +850,7 @@ if command -v nft >/dev/null 2>&1; then
   # match -100, -101, etc.
   if nft list chain inet admin_access input 2>/dev/null | grep -qE "priority [^;]*-[[:space:]]*10[[:space:]]*;"; then
     log "Migration: 'inet admin_access input' chain detected at priority -10 (legacy bug)."
-    existing_ports="$(nft list chain inet admin_access input 2>/dev/null \
-      | awk '/(tcp|udp) dport [0-9]+ accept/{for(i=1;i<=NF;i++) if ($i=="dport") print $(i+1) "/" $(i-1)}' \
-      | tr '\n' ' ' | sed 's/ *$//')"
+    existing_ports="$(extract_nft_admin_access_ports)"
     nft delete chain inet admin_access input
     nft add chain inet admin_access input '{ type filter hook input priority 10 ; policy accept ; }'
     if [ -n "${existing_ports:-}" ]; then
@@ -823,6 +860,8 @@ if command -v nft >/dev/null 2>&1; then
         nft add rule inet admin_access input "$proto" dport "$p" accept
       done
       log "  Rules restored: ports $existing_ports"
+    else
+      err "Warning: no simple tcp/udp dport rule found to restore in admin_access."
     fi
     log "  Priority corrected to 10 -> the blocklist (priority 0) now evaluates BEFORE."
   fi

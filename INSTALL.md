@@ -111,7 +111,7 @@ The script:
 8. **Offers to configure the ipshield crontab**: script path, log file, optional MAILTO, `@reboot` delay. Idempotent (rerun to modify).
 9. **Offers to install the rsyslog filter + logrotate**: `30-blocked-ips.conf` to redirect `BLOCKED:` to `/var/log/blocked-ips.log`, plus two logrotate configs (rotate 4 weekly). Idempotent (compares content, only rewrites if different or absent). If rsyslog is missing (e.g. minimal Debian), a sub-prompt offers to install it or stick with journald (logs viewable via `journalctl -k --grep 'BLOCKED:'`).
 
-> If the chosen firewall is already active (no transition needed), `setup-firewall.sh` jumps directly to steps 7-9.
+> If the chosen firewall is already active (no transition needed), `setup-firewall.sh` can still review/open listening ports on the active firewall, then continues to steps 7-9. The port review prompt defaults to `no`.
 
 Backend selection details:
 
@@ -277,7 +277,7 @@ LOG + DROP rules with `ctstate NEW`, `match-set blacklist src` and `in ens160` (
 
 `setup-firewall.sh` offers crontab configuration at the end of its execution (step 8). This is the recommended method — idempotent, removes previous ipshield cron lines/marker blocks and preserves the rest of the crontab.
 
-To reconfigure the crontab later without touching the firewall: rerun `./setup-firewall.sh` and pick the already-active firewall.
+To reconfigure the crontab later without touching firewall rules: rerun `./setup-firewall.sh`, pick the already-active firewall, then answer `no` to the port review prompt.
 
 The script applies the following default schedule:
 
@@ -592,7 +592,7 @@ Le script :
 8. **Propose de configurer le crontab ipshield** : chemin du script, fichier de log, MAILTO optionnel, délai au `@reboot`. Idempotent (relance possible pour modifier).
 9. **Propose d'installer le filtre rsyslog + logrotate** : `30-blocked-ips.conf` pour rediriger les `BLOCKED:` vers `/var/log/blocked-ips.log`, et deux configs logrotate (rotate 4 weekly). Idempotent (compare le contenu, ne ré-écrit que si différent ou absent). Si rsyslog est absent du système (Debian minimal par exemple), un sous-prompt propose de l'installer ou de garder journald (logs consultables via `journalctl -k --grep 'BLOCKED:'`).
 
-> Si le firewall choisi est déjà actif (pas de transition), `setup-firewall.sh` saute directement aux étapes 7 à 9.
+> Si le firewall choisi est déjà actif (pas de transition), `setup-firewall.sh` peut quand même revoir/ouvrir les ports en écoute sur le firewall actif, puis continue aux étapes 7 à 9. Le prompt de revue des ports propose `no` par défaut.
 
 Détails de sélection du backend :
 
@@ -758,7 +758,7 @@ Les règles LOG + DROP avec `ctstate NEW`, `match-set blacklist src` et `in ens1
 
 `setup-firewall.sh` propose la configuration du crontab à la fin de son exécution (étape 8). C'est la méthode recommandée — elle est idempotente, retire les anciennes lignes/blocs cron ipshield et préserve le reste du crontab.
 
-Pour reconfigurer le crontab plus tard sans toucher au firewall : relancer `./setup-firewall.sh` et choisir le firewall déjà actif.
+Pour reconfigurer le crontab plus tard sans toucher aux règles firewall : relancer `./setup-firewall.sh`, choisir le firewall déjà actif, puis répondre `no` au prompt de revue des ports.
 
 Le script applique le schedule par défaut suivant :
 

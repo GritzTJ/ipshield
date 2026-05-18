@@ -996,31 +996,9 @@ ensure_iptables_backend() {
   fi
 }
 
-# --- Check if already active ---
-if [ "$FIREWALL" = "$DETECTED" ]; then
-  echo ""
-  if [ "$FIREWALL" = "iptables" ]; then
-    ensure_iptables_backend legacy
-  elif [ "$FIREWALL" = "nftables" ]; then
-    ensure_iptables_backend nft
-  fi
-  restart_docker_after_firewall_transition || exit 1
-  log "$FIREWALL is already active on this system (no transition needed)."
-  configure_conf
-  configure_ipset_restore
-  configure_cron
-  configure_logs
-  echo ""
-  log "Now run update-blocklist.sh for the first update; the cron will take over afterwards."
-  exit 0
-fi
-
-echo ""
-log "Installing and enabling: $FIREWALL"
-
 # --- Listening TCP/UDP ports detection (non-loopback) ---
-# Pre-fills the list of ports to allow before activating the new firewall,
-# to avoid breaking exposed services.
+# Pre-fills the list of ports to allow before activation or on an already
+# active firewall, to avoid breaking exposed services.
 detect_listening_ports() {
   if ! command -v ss >/dev/null 2>&1; then
     return 0
@@ -1051,45 +1029,141 @@ detect_listening_ports() {
   ' | sort -t/ -k1,1n -k2,2 | awk '!seen[$1]++'
 }
 
-LISTENING="$(detect_listening_ports)"
+prompt_safe_ports() {
+  local context="$1"
+  local listening default_ports ans normalized_safe_ports entry p proto
+
+  listening="$(detect_listening_ports)"
+
+  echo ""
+  if [ -n "$listening" ]; then
+    log "TCP/UDP ports currently listening (non-loopback):"
+    while IFS=' ' read -r entry proto; do
+      printf "  %-12s %s\n" "$entry" "$proto"
+    done <<< "$listening"
+    echo ""
+    default_ports="$(echo "$listening" | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')"
+    read -rp "Ports to open $context (port[/tcp|/udp], default: $default_ports, edit the list or 'no' to skip): " SAFE_PORTS
+    [ -z "$SAFE_PORTS" ] && SAFE_PORTS="$default_ports"
+  else
+    read -rp "Ports to open $context (port[/tcp|/udp], bare port = tcp, empty to skip): " SAFE_PORTS
+  fi
+
+  if [ "$SAFE_PORTS" = "no" ] || [ "$SAFE_PORTS" = "n" ]; then
+    SAFE_PORTS=""
+  fi
+
+  if [ -n "$SAFE_PORTS" ]; then
+    normalized_safe_ports=""
+    for entry in $SAFE_PORTS; do
+      if ! [[ "$entry" =~ ^([0-9]+)(/(tcp|udp))?$ ]]; then
+        err "invalid port/protocol: $entry"
+        exit 1
+      fi
+      p="${BASH_REMATCH[1]}"
+      proto="${BASH_REMATCH[3]:-tcp}"
+      if [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
+        err "invalid port: $p"
+        exit 1
+      fi
+      normalized_safe_ports+="$p/$proto"$'\n'
+    done
+    SAFE_PORTS="$(printf '%s' "$normalized_safe_ports" | sort -t/ -k1,1n -k2,2 -u | tr '\n' ' ' | sed 's/ *$//')"
+  fi
+}
+
+ensure_iptables_accept_port() {
+  local bin="$1"
+  local proto="$2"
+  local port="$3"
+
+  "$bin" -C INPUT -p "$proto" --dport "$port" -j ACCEPT >/dev/null 2>&1 \
+    || "$bin" -I INPUT -p "$proto" --dport "$port" -j ACCEPT
+}
+
+nft_admin_access_has_port() {
+  local entry="$1"
+  extract_nft_admin_access_ports | tr ' ' '\n' | grep -Fxq "$entry"
+}
+
+ensure_safe_ports_open() {
+  local firewall="$1"
+  local ports="$2"
+  local entry p proto
+
+  [ -n "$ports" ] || return 0
+
+  case "$firewall" in
+    iptables)
+      for entry in $ports; do
+        p="${entry%/*}"
+        proto="${entry#*/}"
+        ensure_iptables_accept_port iptables "$proto" "$p"
+        if command -v ip6tables >/dev/null 2>&1; then
+          ensure_iptables_accept_port ip6tables "$proto" "$p"
+        fi
+      done
+      log "Ports opened (iptables IPv4 + IPv6): $ports"
+      ;;
+    nftables)
+      nft add table inet admin_access 2>/dev/null || true
+      # Priority 10 (POSITIVE, after the blocklist at priority 0): if an IP is
+      # blacklisted, it is dropped by the blocklist BEFORE reaching this ACCEPT.
+      nft add chain inet admin_access input '{ type filter hook input priority 10 ; policy accept ; }' 2>/dev/null || true
+      for entry in $ports; do
+        p="${entry%/*}"
+        proto="${entry#*/}"
+        if ! nft_admin_access_has_port "$entry"; then
+          nft add rule inet admin_access input "$proto" dport "$p" accept
+        fi
+      done
+      log "Ports opened (nftables): $ports"
+      ;;
+    firewalld)
+      for entry in $ports; do
+        firewall-cmd --permanent --add-port="$entry" >/dev/null
+      done
+      firewall-cmd --reload >/dev/null
+      log "Ports opened (firewalld): $ports"
+      ;;
+    ufw)
+      for entry in $ports; do
+        ufw allow "$entry"
+      done
+      log "Ports opened (ufw): $ports"
+      ;;
+  esac
+}
+
+# --- Check if already active ---
+if [ "$FIREWALL" = "$DETECTED" ]; then
+  echo ""
+  if [ "$FIREWALL" = "iptables" ]; then
+    ensure_iptables_backend legacy
+  elif [ "$FIREWALL" = "nftables" ]; then
+    ensure_iptables_backend nft
+  fi
+  restart_docker_after_firewall_transition || exit 1
+  log "$FIREWALL is already active on this system (no transition needed)."
+  if ask_yes_no "Review/open listening ports on the active firewall now?" no; then
+    prompt_safe_ports "on the active firewall"
+    ensure_safe_ports_open "$FIREWALL" "$SAFE_PORTS"
+  else
+    log "Safe ports not modified."
+  fi
+  configure_conf
+  configure_ipset_restore
+  configure_cron
+  configure_logs
+  echo ""
+  log "Now run update-blocklist.sh for the first update; the cron will take over afterwards."
+  exit 0
+fi
 
 echo ""
-if [ -n "$LISTENING" ]; then
-  log "TCP/UDP ports currently listening (non-loopback):"
-  while IFS=' ' read -r entry proc; do
-    printf "  %-12s %s\n" "$entry" "$proc"
-  done <<< "$LISTENING"
-  echo ""
-  DEFAULT_PORTS="$(echo "$LISTENING" | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')"
-  read -rp "Ports to open before activation (port[/tcp|/udp], default: $DEFAULT_PORTS, edit the list or 'no' to skip): " SAFE_PORTS
-  [ -z "$SAFE_PORTS" ] && SAFE_PORTS="$DEFAULT_PORTS"
-else
-  read -rp "Ports to open before activation (port[/tcp|/udp], bare port = tcp, empty to skip): " SAFE_PORTS
-fi
+log "Installing and enabling: $FIREWALL"
 
-# Handle explicit refusal
-if [ "$SAFE_PORTS" = "no" ] || [ "$SAFE_PORTS" = "n" ]; then
-  SAFE_PORTS=""
-fi
-
-# Validation: each port must be 1-65535. Bare ports default to tcp.
-if [ -n "$SAFE_PORTS" ]; then
-  normalized_safe_ports=""
-  for entry in $SAFE_PORTS; do
-    if ! [[ "$entry" =~ ^([0-9]+)(/(tcp|udp))?$ ]]; then
-      err "invalid port/protocol: $entry"
-      exit 1
-    fi
-    p="${BASH_REMATCH[1]}"
-    proto="${BASH_REMATCH[3]:-tcp}"
-    if [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
-      err "invalid port: $p"
-      exit 1
-    fi
-    normalized_safe_ports+="$p/$proto"$'\n'
-  done
-  SAFE_PORTS="$(printf '%s' "$normalized_safe_ports" | sort -t/ -k1,1n -k2,2 -u | tr '\n' ' ' | sed 's/ *$//')"
-fi
+prompt_safe_ports "before activation"
 
 # --- Automatic rollback on failure ---
 # If the script fails between deactivating the old firewall and activating
@@ -1224,54 +1298,22 @@ log "Enabling $FIREWALL..."
 case "$FIREWALL" in
   iptables)
     ensure_iptables_backend legacy
-    if [ -n "$SAFE_PORTS" ]; then
-      for entry in $SAFE_PORTS; do
-        p="${entry%/*}"
-        proto="${entry#*/}"
-        iptables -I INPUT -p "$proto" --dport "$p" -j ACCEPT
-        if command -v ip6tables >/dev/null 2>&1; then
-          ip6tables -I INPUT -p "$proto" --dport "$p" -j ACCEPT
-        fi
-      done
-      log "Ports opened (iptables IPv4 + IPv6): $SAFE_PORTS"
-    fi
+    ensure_safe_ports_open "$FIREWALL" "$SAFE_PORTS"
     log "iptables is ready (no systemd service to enable)."
     ;;
   nftables)
     ensure_iptables_backend nft
     systemctl enable nftables
     systemctl start nftables
-    if [ -n "$SAFE_PORTS" ]; then
-      nft add table inet admin_access 2>/dev/null || true
-      # Priority 10 (POSITIVE, after the blocklist at priority 0): if an IP is
-      # blacklisted, it is dropped by the blocklist BEFORE reaching this ACCEPT.
-      nft add chain inet admin_access input '{ type filter hook input priority 10 ; policy accept ; }' 2>/dev/null || true
-      for entry in $SAFE_PORTS; do
-        p="${entry%/*}"
-        proto="${entry#*/}"
-        nft add rule inet admin_access input "$proto" dport "$p" accept
-      done
-      log "Ports opened (nftables): $SAFE_PORTS"
-    fi
+    ensure_safe_ports_open "$FIREWALL" "$SAFE_PORTS"
     ;;
   firewalld)
     systemctl enable firewalld
     systemctl start firewalld
-    if [ -n "$SAFE_PORTS" ]; then
-      for entry in $SAFE_PORTS; do
-        firewall-cmd --permanent --add-port="$entry" >/dev/null
-      done
-      firewall-cmd --reload >/dev/null
-      log "Ports opened (firewalld): $SAFE_PORTS"
-    fi
+    ensure_safe_ports_open "$FIREWALL" "$SAFE_PORTS"
     ;;
   ufw)
-    if [ -n "$SAFE_PORTS" ]; then
-      for entry in $SAFE_PORTS; do
-        ufw allow "$entry"
-      done
-      log "Ports opened (ufw): $SAFE_PORTS"
-    fi
+    ensure_safe_ports_open "$FIREWALL" "$SAFE_PORTS"
     ufw --force enable
     ;;
 esac

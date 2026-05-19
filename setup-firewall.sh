@@ -371,6 +371,46 @@ detect_firewall() {
 
 DETECTED="$(detect_firewall)"
 
+# Resolve the path to update-blocklist.sh used by cron and by the
+# ipshield-apply.service unit. Source of truth, in order:
+#  1) Existing crontab (prefers what the user picked on a prior install).
+#  2) An existing ipshield-apply.service unit file (rerun without cron).
+#  3) Same directory as setup-firewall.sh (the typical fresh install layout).
+# Returns the resolved path on stdout (empty string if none of the
+# candidates points to an executable file). configure_cron prompts the
+# user with this value as the default; configure_apply_service uses it
+# silently and falls back to a prompt only on detection failure.
+detect_update_script_path() {
+  local current_cron candidate script_dir
+  current_cron="$(crontab -l 2>/dev/null || true)"
+  # Crontab lines quote the script path with single quotes. Embedded single
+  # quotes are escaped as '\''; we don't unescape them because such paths
+  # would also break the cron syntax in practice.
+  candidate="$(printf '%s\n' "$current_cron" \
+    | grep -oE "'[^']*update-blocklist\.sh'" \
+    | head -1 \
+    | sed "s|^'||; s|'$||")"
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    echo "$candidate"
+    return 0
+  fi
+  if [ -f /etc/systemd/system/ipshield-apply.service ]; then
+    candidate="$(awk -F= '/^ExecStart=/{print $2; exit}' /etc/systemd/system/ipshield-apply.service \
+      | awk '{print $1}')"
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+      echo "$candidate"
+      return 0
+    fi
+  fi
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  candidate="$script_dir/update-blocklist.sh"
+  if [ -x "$candidate" ]; then
+    echo "$candidate"
+    return 0
+  fi
+  return 1
+}
+
 # --- Cron configuration (idempotent interactive prompt) ---
 configure_cron() {
   echo ""
@@ -390,12 +430,17 @@ configure_cron() {
   local current_cron
   current_cron="$(crontab -l 2>/dev/null || true)"
 
-  # Default path: same directory as this script. Existing ipshield cron lines
-  # are removed by basename below; the default is intentionally not parsed back
-  # from crontab because quoted paths with spaces are ambiguous in cron syntax.
-  local script_dir script_path log_path mailto reboot_delay
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  script_path="$script_dir/update-blocklist.sh"
+  # Default path: pulled from the existing crontab if present, otherwise from
+  # this script's directory. The boot-time reapply is handled by
+  # ipshield-apply.service (After=docker.service), so the cron only carries
+  # the 12-hour refresh schedule; the historical @reboot line is removed.
+  local script_path log_path mailto
+  script_path="$(detect_update_script_path)"
+  if [ -z "$script_path" ]; then
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    script_path="$script_dir/update-blocklist.sh"
+  fi
 
   read -rp "Path to update-blocklist.sh [$script_path]: " ans
   [ -n "$ans" ] && script_path="$ans"
@@ -414,20 +459,13 @@ configure_cron() {
     return 0
   fi
 
-  reboot_delay=60
-  read -rp "@reboot delay in seconds (lets Docker start) [$reboot_delay]: " ans
-  if [ -n "$ans" ]; then
-    if ! [[ "$ans" =~ ^[0-9]+$ ]] || [ "$ans" -gt 3600 ]; then
-      err "Invalid delay. Expected an integer between 0 and 3600 seconds. Cron not configured."
-      return 0
-    fi
-    reboot_delay="$ans"
-  fi
-
-  # Filter existing ipshield lines (by basename), plus future marker blocks.
+  # Filter existing ipshield lines (by basename), plus marker blocks. The
+  # basename filter also strips any pre-existing `@reboot sleep N && ...`
+  # line installed by older setup-firewall.sh versions, migrating existing
+  # installs to the ipshield-apply.service model automatically.
   # Do not remove global MAILTO lines from the user's crontab: cron variables
   # are positional and may apply to unrelated jobs.
-  local filtered_cron new_lines new_cron reboot_log_cmd script_cmd log_cmd
+  local filtered_cron new_lines new_cron script_cmd log_cmd
   local script_basename existing_mailto
   script_basename="$(basename "$script_path")"
   existing_mailto="$(printf '%s\n' "$current_cron" | awk '/^[[:space:]]*MAILTO=/{print; exit}')"
@@ -447,15 +485,9 @@ configure_cron() {
   }
   script_cmd="$(shell_quote "$script_path")"
   log_cmd="$(shell_quote "$log_path")"
-  reboot_log_cmd="echo \"--- Trigger: reboot on \$(date '+\\%Y-\\%m-\\%d \\%H:\\%M:\\%S \\%Z') ---\" >> $log_cmd"
   new_lines="# ipshield cron begin"$'\n'
   [ -n "$mailto" ] && new_lines+="MAILTO=$mailto"$'\n'
   new_lines+="0 */12 * * * $script_cmd >> $log_cmd 2>&1"$'\n'
-  if [ "$reboot_delay" -gt 0 ]; then
-    new_lines+="@reboot sleep $reboot_delay && $reboot_log_cmd && $script_cmd >> $log_cmd 2>&1"$'\n'
-  else
-    new_lines+="@reboot $reboot_log_cmd && $script_cmd >> $log_cmd 2>&1"$'\n'
-  fi
   if [ -n "$mailto" ] && [ -n "$existing_mailto" ] && [ "$existing_mailto" != "MAILTO=$mailto" ]; then
     log "Existing crontab MAILTO will be preserved after the ipshield block: $existing_mailto"
     new_lines+="$existing_mailto"$'\n'
@@ -688,6 +720,62 @@ WantedBy=sysinit.target"
   systemctl daemon-reload
   systemctl enable ipshield-restore.service
   log "ipset restore service enabled. The save file will be written by update-blocklist.sh after a successful run."
+}
+
+# --- ipshield-apply.service: attach firewall rules to the restored ipset ---
+# Replaces the historical 'cron @reboot sleep 60 && update-blocklist.sh'
+# trick which left a ~70s window where Docker was up but the blocklist was
+# not yet applied. The unit runs After=docker.service so DOCKER-USER exists
+# when update-blocklist.sh --apply-only inspects it; the apply-only fast
+# path skips the download and just attaches LOG/DROP rules to the ipset
+# already loaded by ipshield-restore.service. Falls back to a full update
+# if the ipset is missing or empty (e.g. PERSIST_IPSET=0).
+configure_apply_service() {
+  local conf_path="/etc/update-blocklist.conf"
+  local service_path="/etc/systemd/system/ipshield-apply.service"
+  local script_path
+
+  echo ""
+
+  script_path="$(detect_update_script_path)"
+  if [ -z "$script_path" ]; then
+    read -rp "Path to update-blocklist.sh for ipshield-apply.service: " script_path
+    if [ -z "$script_path" ] || [ ! -x "$script_path" ]; then
+      err "$script_path does not exist or is not executable. ipshield-apply.service not configured."
+      return 0
+    fi
+  fi
+
+  if ! ask_yes_no "Install/update the ipshield-apply.service systemd unit (closes the boot exposure window)?" yes; then
+    log "ipshield-apply.service not configured."
+    return 0
+  fi
+
+  local unit_content="[Unit]
+Description=Attach ipshield firewall rules to the restored blacklist ipset
+After=ipshield-restore.service nftables.service docker.service
+Wants=ipshield-restore.service
+ConditionPathExists=$conf_path
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=$script_path --apply-only
+
+[Install]
+WantedBy=multi-user.target"
+
+  if [ -f "$service_path" ] && [ "$(cat "$service_path")" = "$unit_content" ]; then
+    log "ipshield-apply.service already up-to-date."
+  else
+    printf '%s\n' "$unit_content" > "$service_path"
+    chmod 644 "$service_path"
+    log "Installed $service_path"
+  fi
+
+  systemctl daemon-reload
+  systemctl enable ipshield-apply.service >/dev/null 2>&1 || true
+  log "ipshield-apply.service enabled. Rules will be (re)attached at boot, after Docker."
 }
 
 # --- Logs configuration (rsyslog filter + logrotate) ---
@@ -1400,6 +1488,7 @@ if [ "$FIREWALL" = "$DETECTED" ]; then
   configure_conf
   configure_ipset_restore
   configure_cron
+  configure_apply_service
   configure_logs
   echo ""
   log "Now run update-blocklist.sh for the first update; the cron will take over afterwards."
@@ -1626,6 +1715,7 @@ log "$FIREWALL installed and enabled successfully."
 configure_conf
 configure_ipset_restore
 configure_cron
+configure_apply_service
 configure_logs
 
 echo ""

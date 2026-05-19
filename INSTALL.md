@@ -108,10 +108,11 @@ The script:
 5. Installs and enables the new firewall
 6. Verifies the firewall responds after activation (otherwise rolls back)
 7. **Installs `/etc/update-blocklist.conf`** from `update-blocklist.conf.example` if missing (chmod 600, owner root). Existing files are preserved to keep user changes intact.
-8. **Offers to configure the ipshield crontab**: script path, log file, optional MAILTO, `@reboot` delay. Idempotent (rerun to modify).
-9. **Offers to install the rsyslog filter + logrotate**: `30-blocked-ips.conf` to redirect `BLOCKED:` to `/var/log/blocked-ips.log`, plus two logrotate configs (rotate 4 weekly). Idempotent (compares content, only rewrites if different or absent). If rsyslog is missing (e.g. minimal Debian), a sub-prompt offers to install it or stick with journald (logs viewable via `journalctl -k --grep 'BLOCKED:'`).
+8. **Offers to configure the ipshield crontab**: script path, log file, optional MAILTO. Only a `0 */12` line is generated; boot-time reapplication is handled by `ipshield-apply.service` (next step) which closes the historical ~70s exposure window. Idempotent (rerun to modify).
+9. **Offers to install `ipshield-apply.service`**: a systemd unit ordered `After=ipshield-restore.service nftables.service docker.service` that runs `update-blocklist.sh --apply-only` at boot. This attaches the firewall rules to the restored ipset within seconds of Docker being up, without re-downloading the blocklist. If the ipset is missing or empty (e.g. corrupted save file, `PERSIST_IPSET=0`), it falls back to a full update so the system is never left unprotected.
+10. **Offers to install the rsyslog filter + logrotate**: `30-blocked-ips.conf` to redirect `BLOCKED:` to `/var/log/blocked-ips.log`, plus two logrotate configs (rotate 4 weekly). Idempotent (compares content, only rewrites if different or absent). If rsyslog is missing (e.g. minimal Debian), a sub-prompt offers to install it or stick with journald (logs viewable via `journalctl -k --grep 'BLOCKED:'`).
 
-> If the chosen firewall is already active (no transition needed), `setup-firewall.sh` can still review/open listening ports on the active firewall, then continues to steps 7-9. The port review prompt defaults to `no`.
+> If the chosen firewall is already active (no transition needed), `setup-firewall.sh` can still review/open listening ports on the active firewall, then continues to steps 7-10. The port review prompt defaults to `no`.
 
 Backend selection details:
 
@@ -197,18 +198,19 @@ The whitelist ipset name is `WHITELIST_SET_NAME` (`${SET_NAME}-allow` by default
 
 > **Anti-typo safeguard**: by default, any prefix < `/8` is rejected (`WHITELIST_MIN_PREFIX=8`). This blocks the classic `0.0.0.0/0` typo that would open the whole Internet to a total bypass. To allow a wider prefix, lower `WHITELIST_MIN_PREFIX` explicitly.
 
-#### Boot-time ipset persistence
+#### Boot-time ipset persistence and fast rule reattach
 
-**Problem.** At server boot, the `ipset blacklist` (which lives in RAM) is empty unless it is restored from disk before persistent firewall rules start. Until `update-blocklist.sh` runs via the `@reboot` cron, runtime-only rules are not re-applied:
+**Problem.** At server boot, the `ipset blacklist` (which lives in RAM) is empty unless it is restored from disk before persistent firewall rules start. And on `iptables`/`nftables`, the runtime LOG/DROP rules that reference the ipset do not persist either: they need to be (re)attached after boot. Without a dedicated mechanism this would leave a fail-open window:
 
-- **iptables / nftables**: ipshield LOG/DROP rules are runtime rules and are not persisted to disk by default → fail-open until the `@reboot` cron re-applies them.
+- **iptables / nftables**: ipshield LOG/DROP rules are runtime rules and are not persisted to disk by default → fail-open until they are reapplied.
 - **ufw / firewalld with iptables-nft**: persistent rules may reference an ipset that does not exist yet. On modern Ubuntu/Debian this can make firewall reload/start fail with `Set <name> doesn't exist`.
 
-`ipshield` now supports first-class ipset persistence:
+`ipshield` ships two systemd units that, together, close the boot window to under two seconds:
 
-- `update-blocklist.sh` saves the ipshield sets after each successful run when `PERSIST_IPSET=1` (default).
-- `setup-firewall.sh` can install `ipshield-restore.service`, ordered before `ufw.service`, `firewalld.service` and `nftables.service`.
-- The service restores `/var/lib/ipshield/ipset.save` before the firewall loads persistent rules.
+1. **`ipshield-restore.service`** (early): restores `/var/lib/ipshield/ipset.save` before `ufw.service`, `firewalld.service` and `nftables.service` start. Provides the ipset data.
+2. **`ipshield-apply.service`** (after Docker): runs `update-blocklist.sh --apply-only`, ordered `After=ipshield-restore.service nftables.service docker.service`. Skips the ~30s download/parse/swap cycle and just attaches the LOG/DROP rules (and DOCKER-USER rules, when Docker is present) to the ipset that step 1 has loaded. Falls back to a full update if the ipset save file is missing or empty (e.g. `PERSIST_IPSET=0`, corrupted file, first boot after a fresh install) so the host is never left unprotected.
+
+`update-blocklist.sh` saves the ipshield sets after each successful run when `PERSIST_IPSET=1` (default), feeding the two units above. The legacy `cron @reboot sleep 60 && update-blocklist.sh` line has been removed: the systemd ordering removes the need for an arbitrary `sleep`, and existing installs are migrated automatically on the next `setup-firewall.sh` rerun.
 
 Relevant config:
 
@@ -217,7 +219,7 @@ PERSIST_IPSET=1
 IPSET_SAVE_FILE="/var/lib/ipshield/ipset.save"
 ```
 
-For direct `iptables`, persistence is optional: rules are not persistent by default, so the fallback is fail-open until the next cron run. For `ufw` and `firewalld`, enable the restore service.
+For direct `iptables`, persistence is still optional: rules are not persistent by default, so `ipshield-apply.service` is what actually puts protection back. For `ufw` and `firewalld`, both units matter.
 
 #### Migration: legacy nftables admin_access priority bug
 
@@ -234,7 +236,7 @@ iptables -S INPUT | grep blacklist-allow
 
 ### Uninstall
 
-`uninstall.sh` removes ipshield rules (LOG/DROP blocklist + ACCEPT whitelist), destroys the associated ipsets, removes ipshield/orphan rules from `/etc/ufw/before.rules` line by line, and can disable/remove `ipshield-restore.service`. It **does not uninstall** the firewall or any packages.
+`uninstall.sh` removes ipshield rules (LOG/DROP blocklist + ACCEPT whitelist), destroys the associated ipsets, removes ipshield/orphan rules from `/etc/ufw/before.rules` line by line, and can disable/remove `ipshield-restore.service` and `ipshield-apply.service`. It **does not uninstall** the firewall or any packages.
 
 ```bash
 # Dry-run mode (default): shows what would be done
@@ -246,9 +248,10 @@ iptables -S INPUT | grep blacklist-allow
 
 In `--apply` mode, after rules and ipsets are removed, separate prompts offer to remove:
 1. `ipshield-restore.service`;
-2. ipshield cron lines from root's crontab (the rest is preserved);
-3. `/etc/update-blocklist.conf` and the ipset persistence file, usually `/var/lib/ipshield/ipset.save`;
-4. the `/etc/rsyslog.d/30-blocked-ips.conf` and `/etc/logrotate.d/{update-blocklist,blocked-ips}` configs (rsyslog is restarted if the filter is removed);
+2. `ipshield-apply.service`;
+3. ipshield cron lines from root's crontab (the rest is preserved);
+4. `/etc/update-blocklist.conf` and the ipset persistence file, usually `/var/lib/ipshield/ipset.save`;
+5. the `/etc/rsyslog.d/30-blocked-ips.conf` and `/etc/logrotate.d/{update-blocklist,blocked-ips}` configs (rsyslog is restarted if the filter is removed);
 5. ipshield log files matching `/var/log/update-blocklist.log*` and `/var/log/blocked-ips.log*`, including rotated/compressed files.
 
 Entries in `/etc/crontab` or `/etc/cron.d/*` are only listed (must be removed manually). Journald/kernel entries are not purged; journal vacuuming is a global system operation.
@@ -269,7 +272,7 @@ Blocklist rules are also scoped to `conntrack --ctstate NEW`. For TCP, this mean
 
 **Notes:**
 
-- Docker recreates `DOCKER-USER` on each daemon restart — rules do not persist. The cron + `@reboot` automatically reapplies them, and idempotency avoids duplicates.
+- Docker recreates `DOCKER-USER` on each daemon restart — rules do not persist. `ipshield-apply.service` (at boot) and the `0 */12` cron reapply them, and idempotency avoids duplicates.
 - If the script runs at boot before Docker, `DOCKER-USER` does not exist yet — the detection is correctly negative. The next cron run picks it up.
 - `setup-firewall.sh` handles Docker firewall transitions interactively: when Docker chains are present, it can stop Docker, clean Docker-owned chains, continue setup, then restart Docker. If Docker reports a missing `DOCKER` chain after a manual firewall change, restart Docker so it recreates its NAT/filter chains.
 - No configuration needed if WAN auto-detection works: detection and application are fully automatic.
@@ -284,7 +287,7 @@ LOG + DROP rules with `ctstate NEW`, `match-set blacklist src` and `in ens160` (
 
 ### Cron automation
 
-`setup-firewall.sh` offers crontab configuration at the end of its execution (step 8). This is the recommended method — idempotent, removes previous ipshield cron lines/marker blocks and preserves the rest of the crontab.
+`setup-firewall.sh` offers crontab configuration at the end of its execution (step 8). This is the recommended method — idempotent, removes previous ipshield cron lines/marker blocks (including any legacy `@reboot sleep N && ...` line from prior versions) and preserves the rest of the crontab.
 
 To reconfigure the crontab later without touching firewall rules: rerun `./setup-firewall.sh`, pick the already-active firewall, then answer `no` to the port review prompt.
 
@@ -293,12 +296,10 @@ The script applies the following default schedule:
 ```
 # ipshield cron begin
 0 */12 * * * /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
-@reboot sleep 60 && echo "--- Trigger: reboot on $(date '+\%Y-\%m-\%d \%H:\%M:\%S \%Z') ---" >> /var/log/update-blocklist.log && /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
 # ipshield cron end
 ```
 
-- `sleep 60` at `@reboot`: gives Docker time to start before the script looks for the `DOCKER-USER` chain (adjustable via the prompt).
-- The `@reboot` line writes a `Trigger: reboot` marker to `/var/log/update-blocklist.log` before the update starts, so reboot-triggered runs are easy to distinguish from scheduled cron runs.
+- Boot reapplication is handled by `ipshield-apply.service` (ordered `After=docker.service`), not by an `@reboot` cron line. The historical `@reboot sleep 60 && ...` line has been removed because the systemd ordering closes the boot exposure window from ~70 s to <2 s and removes the arbitrary `sleep`.
 - `MAILTO=...` is added inside the ipshield cron block if an email address is provided. If an existing root crontab `MAILTO` differs, it is restored after the ipshield block so unrelated jobs keep their recipient.
 
 #### Manual configuration (alternative)
@@ -312,8 +313,9 @@ crontab -e
 ```
 MAILTO=admin@example.com
 0 */12 * * * /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
-@reboot sleep 60 && echo "--- Trigger: reboot on $(date '+\%Y-\%m-\%d \%H:\%M:\%S \%Z') ---" >> /var/log/update-blocklist.log && /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
 ```
+
+In a manual setup, also enable `ipshield-apply.service` to keep the fast boot reattach: `setup-firewall.sh` installs it under `/etc/systemd/system/ipshield-apply.service` and runs `systemctl enable ipshield-apply.service`.
 
 ### Logs
 
@@ -598,10 +600,11 @@ Le script :
 5. Installe et active le nouveau firewall
 6. Vérifie que le firewall répond après activation (sinon rollback)
 7. **Installe `/etc/update-blocklist.conf`** depuis `update-blocklist.conf.example` si absent (chmod 600, owner root). Ne touche pas au fichier existant pour préserver les modifications.
-8. **Propose de configurer le crontab ipshield** : chemin du script, fichier de log, MAILTO optionnel, délai au `@reboot`. Idempotent (relance possible pour modifier).
-9. **Propose d'installer le filtre rsyslog + logrotate** : `30-blocked-ips.conf` pour rediriger les `BLOCKED:` vers `/var/log/blocked-ips.log`, et deux configs logrotate (rotate 4 weekly). Idempotent (compare le contenu, ne ré-écrit que si différent ou absent). Si rsyslog est absent du système (Debian minimal par exemple), un sous-prompt propose de l'installer ou de garder journald (logs consultables via `journalctl -k --grep 'BLOCKED:'`).
+8. **Propose de configurer le crontab ipshield** : chemin du script, fichier de log, MAILTO optionnel. Seule une ligne `0 */12` est générée ; la réapplication au boot est confiée à `ipshield-apply.service` (étape suivante), qui ferme la fenêtre d'exposition d'environ 70 s. Idempotent (relance possible pour modifier).
+9. **Propose d'installer `ipshield-apply.service`** : un unit systemd ordonné `After=ipshield-restore.service nftables.service docker.service` qui exécute `update-blocklist.sh --apply-only` au boot. Attache les règles firewall à l'ipset restauré quelques secondes après le démarrage de Docker, sans retélécharger la blocklist. Si l'ipset est absent ou vide (sauvegarde corrompue, `PERSIST_IPSET=0`), bascule sur un update complet pour ne jamais laisser l'hôte sans protection.
+10. **Propose d'installer le filtre rsyslog + logrotate** : `30-blocked-ips.conf` pour rediriger les `BLOCKED:` vers `/var/log/blocked-ips.log`, et deux configs logrotate (rotate 4 weekly). Idempotent (compare le contenu, ne ré-écrit que si différent ou absent). Si rsyslog est absent du système (Debian minimal par exemple), un sous-prompt propose de l'installer ou de garder journald (logs consultables via `journalctl -k --grep 'BLOCKED:'`).
 
-> Si le firewall choisi est déjà actif (pas de transition), `setup-firewall.sh` peut quand même revoir/ouvrir les ports en écoute sur le firewall actif, puis continue aux étapes 7 à 9. Le prompt de revue des ports propose `no` par défaut.
+> Si le firewall choisi est déjà actif (pas de transition), `setup-firewall.sh` peut quand même revoir/ouvrir les ports en écoute sur le firewall actif, puis continue aux étapes 7 à 10. Le prompt de revue des ports propose `no` par défaut.
 
 Détails de sélection du backend :
 
@@ -687,18 +690,19 @@ Le nom de l'ipset whitelist est `WHITELIST_SET_NAME` (`${SET_NAME}-allow` par d�
 
 > **Garde-fou anti-typo** : par défaut, tout préfixe < `/8` est refusé (`WHITELIST_MIN_PREFIX=8`). Cela bloque le piège classique d'un `0.0.0.0/0` accidentel qui ouvrirait tout Internet en bypass total. Pour autoriser un préfixe plus large, abaisser `WHITELIST_MIN_PREFIX` explicitement.
 
-#### Persistance ipset au reboot
+#### Persistance ipset au reboot et reattach rapide
 
-**Problème.** Au reboot du serveur, l'`ipset blacklist` (qui vit en RAM) est vide s'il n'est pas restauré depuis le disque avant le démarrage des règles firewall persistantes. Tant que `update-blocklist.sh` n'a pas tourné via la cron `@reboot`, les règles runtime seules ne sont pas réappliquées :
+**Problème.** Au reboot du serveur, l'`ipset blacklist` (qui vit en RAM) est vide s'il n'est pas restauré depuis le disque avant le démarrage des règles firewall persistantes. Et sur `iptables`/`nftables`, les règles LOG/DROP runtime qui référencent l'ipset ne persistent pas non plus : il faut les (ré)attacher après le boot. Sans mécanisme dédié, cela laisserait une fenêtre fail-open :
 
-- **iptables / nftables** : les règles LOG/DROP ipshield sont des règles runtime et ne sont pas persistées sur disque par défaut → fail-open jusqu'à la réapplication par la cron `@reboot`.
+- **iptables / nftables** : les règles LOG/DROP ipshield sont des règles runtime non persistantes par défaut → fail-open jusqu'à la réapplication.
 - **ufw / firewalld avec iptables-nft** : les règles persistantes peuvent référencer un ipset qui n'existe pas encore. Sur Ubuntu/Debian récents, cela peut faire échouer le reload/démarrage du firewall avec `Set <name> doesn't exist`.
 
-`ipshield` gère maintenant la persistance ipset nativement :
+`ipshield` fournit deux unit systemd qui, ensemble, ferment la fenêtre de boot à moins de deux secondes :
 
-- `update-blocklist.sh` sauvegarde les sets ipshield après chaque run réussi quand `PERSIST_IPSET=1` (défaut).
-- `setup-firewall.sh` peut installer `ipshield-restore.service`, ordonné avant `ufw.service`, `firewalld.service` et `nftables.service`.
-- Le service restaure `/var/lib/ipshield/ipset.save` avant que le firewall charge ses règles persistantes.
+1. **`ipshield-restore.service`** (très tôt) : restaure `/var/lib/ipshield/ipset.save` avant le démarrage de `ufw.service`, `firewalld.service` et `nftables.service`. Fournit les données de l'ipset.
+2. **`ipshield-apply.service`** (après Docker) : exécute `update-blocklist.sh --apply-only`, ordonné `After=ipshield-restore.service nftables.service docker.service`. Saute le cycle download/parse/swap d'environ 30 s et attache uniquement les règles LOG/DROP (et DOCKER-USER, quand Docker est présent) à l'ipset restauré par l'étape 1. Bascule sur un update complet si le fichier de sauvegarde ipset est absent ou vide (`PERSIST_IPSET=0`, fichier corrompu, premier boot après une install fraîche) pour ne jamais laisser l'hôte sans protection.
+
+`update-blocklist.sh` sauvegarde les sets ipshield après chaque run réussi quand `PERSIST_IPSET=1` (défaut), alimentant les deux unit ci-dessus. L'ancienne ligne `cron @reboot sleep 60 && update-blocklist.sh` a été supprimée : l'ordering systemd remplace le `sleep` arbitraire, et les installations existantes migrent automatiquement à la prochaine relance de `setup-firewall.sh`.
 
 Configuration :
 
@@ -707,7 +711,7 @@ PERSIST_IPSET=1
 IPSET_SAVE_FILE="/var/lib/ipshield/ipset.save"
 ```
 
-Avec `iptables` direct, la persistance est optionnelle : les règles ne sont pas persistantes par défaut, donc le fallback est fail-open jusqu'au prochain cron. Avec `ufw` et `firewalld`, activez le service de restauration.
+Avec `iptables` direct, la persistance reste optionnelle : les règles ne sont pas persistantes par défaut, c'est `ipshield-apply.service` qui rétablit la protection. Avec `ufw` et `firewalld`, les deux unit sont utiles.
 
 #### Migration : ancien bug nftables (priorité de chaîne admin_access)
 
@@ -724,7 +728,7 @@ iptables -S INPUT | grep blacklist-allow
 
 ### Désinstallation
 
-`uninstall.sh` retire les règles ipshield (LOG/DROP blocklist + ACCEPT whitelist), détruit les ipsets associés, retire les règles ipshield/orphelines de `/etc/ufw/before.rules` ligne par ligne, et peut désactiver/supprimer `ipshield-restore.service`. Il **ne désinstalle pas** le firewall ni les paquets.
+`uninstall.sh` retire les règles ipshield (LOG/DROP blocklist + ACCEPT whitelist), détruit les ipsets associés, retire les règles ipshield/orphelines de `/etc/ufw/before.rules` ligne par ligne, et peut désactiver/supprimer `ipshield-restore.service` et `ipshield-apply.service`. Il **ne désinstalle pas** le firewall ni les paquets.
 
 ```bash
 # Mode dry-run (défaut) : affiche ce qui serait fait
@@ -736,10 +740,11 @@ iptables -S INPUT | grep blacklist-allow
 
 En mode `--apply`, après suppression des règles et ipsets, des prompts séparés proposent de retirer :
 1. `ipshield-restore.service` ;
-2. les lignes cron ipshield du crontab de root (le reste est préservé) ;
-3. `/etc/update-blocklist.conf` et le fichier de persistance ipset, généralement `/var/lib/ipshield/ipset.save` ;
-4. les configs `/etc/rsyslog.d/30-blocked-ips.conf` et `/etc/logrotate.d/{update-blocklist,blocked-ips}` (rsyslog est redémarré si le filtre est retiré) ;
-5. les fichiers de logs ipshield correspondant à `/var/log/update-blocklist.log*` et `/var/log/blocked-ips.log*`, y compris les fichiers rotatés/compressés.
+2. `ipshield-apply.service` ;
+3. les lignes cron ipshield du crontab de root (le reste est préservé) ;
+4. `/etc/update-blocklist.conf` et le fichier de persistance ipset, généralement `/var/lib/ipshield/ipset.save` ;
+5. les configs `/etc/rsyslog.d/30-blocked-ips.conf` et `/etc/logrotate.d/{update-blocklist,blocked-ips}` (rsyslog est redémarré si le filtre est retiré) ;
+6. les fichiers de logs ipshield correspondant à `/var/log/update-blocklist.log*` et `/var/log/blocked-ips.log*`, y compris les fichiers rotatés/compressés.
 
 Les entrées dans `/etc/crontab` ou `/etc/cron.d/*` sont seulement listées (à retirer manuellement). Les entrées journald/kernel ne sont pas purgées ; le vacuum du journal est une opération système globale.
 
@@ -759,7 +764,7 @@ Les règles blocklist sont aussi limitées à `conntrack --ctstate NEW`. Pour TC
 
 **Notes :**
 
-- Docker recrée `DOCKER-USER` à chaque restart du daemon — les règles ne persistent pas. Le cron + `@reboot` les réapplique automatiquement, et l'idempotence évite les doublons.
+- Docker recrée `DOCKER-USER` à chaque restart du daemon — les règles ne persistent pas. `ipshield-apply.service` (au boot) et le cron `0 */12` les réappliquent automatiquement, et l'idempotence évite les doublons.
 - Si le script s'exécute au boot avant Docker, `DOCKER-USER` n'existe pas encore — la détection est correctement négative. Le prochain cron rattrapera.
 - `setup-firewall.sh` gère les transitions firewall avec Docker de manière interactive : lorsque des chaînes Docker sont présentes, il peut arrêter Docker, nettoyer les chaînes Docker, poursuivre le setup, puis redémarrer Docker. Si Docker signale une chaîne `DOCKER` manquante après un changement manuel de firewall, redémarrer Docker pour qu'il recrée ses chaînes NAT/filter.
 - Aucune configuration nécessaire si l'auto-détection WAN fonctionne : la détection et l'application sont entièrement automatiques.
@@ -774,7 +779,7 @@ Les règles LOG + DROP avec `ctstate NEW`, `match-set blacklist src` et `in ens1
 
 ### Automatisation (cron)
 
-`setup-firewall.sh` propose la configuration du crontab à la fin de son exécution (étape 8). C'est la méthode recommandée — elle est idempotente, retire les anciennes lignes/blocs cron ipshield et préserve le reste du crontab.
+`setup-firewall.sh` propose la configuration du crontab à la fin de son exécution (étape 8). C'est la méthode recommandée — elle est idempotente, retire les anciennes lignes/blocs cron ipshield (y compris une éventuelle ligne `@reboot sleep N && ...` héritée d'anciennes versions) et préserve le reste du crontab.
 
 Pour reconfigurer le crontab plus tard sans toucher aux règles firewall : relancer `./setup-firewall.sh`, choisir le firewall déjà actif, puis répondre `no` au prompt de revue des ports.
 
@@ -783,12 +788,10 @@ Le script applique le schedule par défaut suivant :
 ```
 # ipshield cron begin
 0 */12 * * * /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
-@reboot sleep 60 && echo "--- Trigger: reboot on $(date '+\%Y-\%m-\%d \%H:\%M:\%S \%Z') ---" >> /var/log/update-blocklist.log && /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
 # ipshield cron end
 ```
 
-- `sleep 60` au `@reboot` : laisse le temps à Docker de démarrer avant que le script cherche la chaîne `DOCKER-USER` (ajustable via le prompt).
-- La ligne `@reboot` écrit un marqueur `Trigger: reboot` dans `/var/log/update-blocklist.log` avant le démarrage de l'update, afin de distinguer facilement les runs déclenchés par reboot des runs cron planifiés.
+- La réapplication au boot est confiée à `ipshield-apply.service` (ordonné `After=docker.service`), pas à une ligne `@reboot`. L'ancienne ligne `@reboot sleep 60 && ...` a été supprimée car l'ordering systemd ramène la fenêtre d'exposition d'environ 70 s à moins de 2 s et supprime le `sleep` arbitraire.
 - `MAILTO=...` est ajouté dans le bloc cron ipshield si une adresse email est fournie. Si un `MAILTO` root existant diffère, il est restauré après le bloc ipshield afin de préserver les autres jobs.
 
 #### Configuration manuelle (alternative)
@@ -802,8 +805,9 @@ crontab -e
 ```
 MAILTO=admin@exemple.fr
 0 */12 * * * /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
-@reboot sleep 60 && echo "--- Trigger: reboot on $(date '+\%Y-\%m-\%d \%H:\%M:\%S \%Z') ---" >> /var/log/update-blocklist.log && /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
 ```
+
+Dans une configuration manuelle, pensez aussi à activer `ipshield-apply.service` pour préserver le reattach rapide au boot : `setup-firewall.sh` l'installe dans `/etc/systemd/system/ipshield-apply.service` et exécute `systemctl enable ipshield-apply.service`.
 
 ### Logs
 

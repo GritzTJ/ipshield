@@ -22,6 +22,11 @@ firewall and apply the blocking rules.
 Options:
   -n, --dry-run       Simulation mode (no ipset/firewall change)
   -v, --verbose       Verbose output (per-source stats, diff details)
+      --apply-only    Skip download/parse/swap; attach firewall rules to
+                      the existing ipset. Falls back to a full update if
+                      the ipset is missing or empty. Intended for the
+                      boot-time ipshield-apply.service unit so the
+                      protection becomes active in <2s after Docker is up.
   -c, --config FILE   Configuration file path
   -h, --help          Show this help
 
@@ -39,17 +44,19 @@ fi
 # --- CLI parsing ---
 CLI_DRY_RUN=""
 CLI_VERBOSE=""
+CLI_APPLY_ONLY=""
 CONF_FILE="/etc/update-blocklist.conf"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    -n|--dry-run)  CLI_DRY_RUN=1; shift ;;
-    -v|--verbose)  CLI_VERBOSE=1; shift ;;
+    -n|--dry-run)   CLI_DRY_RUN=1; shift ;;
+    -v|--verbose)   CLI_VERBOSE=1; shift ;;
+    --apply-only)   CLI_APPLY_ONLY=1; shift ;;
     -c|--config)
       [ $# -ge 2 ] || { echo "Error: --config requires an argument." >&2; exit 1; }
       CONF_FILE="$2"; shift 2 ;;
-    -h|--help)     usage ;;
-    *)             echo "Unknown option: $1" >&2; usage ;;
+    -h|--help)      usage ;;
+    *)              echo "Unknown option: $1" >&2; usage ;;
   esac
 done
 
@@ -86,6 +93,8 @@ fi
 # --- Apply CLI overrides (precedence over config) ---
 [ -n "$CLI_DRY_RUN" ] && DRY_RUN=1
 [ -n "$CLI_VERBOSE" ] && VERBOSE=1
+APPLY_ONLY=0
+[ -n "$CLI_APPLY_ONLY" ] && APPLY_ONLY=1
 
 # --- Validate required variables (defined in the conf file) ---
 if [ "${#URLS[@]}" -eq 0 ]; then
@@ -962,6 +971,51 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qE "^Status:
   else
     _ufw_preflight_ipsets
   fi
+fi
+
+# --- Apply-only fast path ---
+# Called by ipshield-apply.service at boot, ordered after Docker, to attach
+# LOG/DROP/ACCEPT rules to the ipset that ipshield-restore.service has
+# already loaded from /var/lib/ipshield/ipset.save. Skips the ~30s
+# download+parse+swap cycle so protection becomes active within seconds
+# of Docker being up. Falls back to the full pipeline when the prerequisite
+# ipset is missing or empty (corrupted save file, first boot after a fresh
+# install, PERSIST_IPSET=0, etc.) so the system is never left unprotected.
+if [ "$APPLY_ONLY" -eq 1 ]; then
+  apply_only_ok=1
+  apply_only_entries=0
+  if ! ipset list -n 2>/dev/null | awk -v s="$SET_NAME" '$0==s{found=1} END{exit(found?0:1)}'; then
+    err "Warning: --apply-only: ipset '$SET_NAME' does not exist. Falling back to full update."
+    apply_only_ok=0
+  else
+    apply_only_entries="$(ipset list -t "$SET_NAME" 2>/dev/null | awk -F': ' '/Number of entries/{print $2+0; exit}')"
+    if [ -z "$apply_only_entries" ] || [ "$apply_only_entries" -lt 1 ]; then
+      err "Warning: --apply-only: ipset '$SET_NAME' is empty. Falling back to full update."
+      apply_only_ok=0
+    fi
+  fi
+
+  if [ "$apply_only_ok" -eq 1 ]; then
+    log "--apply-only: attaching firewall rules to existing '$SET_NAME' ($(fmt_num "$apply_only_entries") entries)."
+    DETECTED_FW="$(detect_firewall)"
+    if [ "$DETECTED_FW" = "none" ]; then
+      err "No firewall detected. The ipset is loaded but no blocking rule was applied."
+      err "Run setup-firewall.sh to install a firewall, or install one manually."
+      exit 1
+    fi
+    if detect_docker; then
+      log "Detected firewall: $DETECTED_FW (Docker present, DOCKER-USER chain found)"
+    else
+      log "Detected firewall: $DETECTED_FW"
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "[DRY-RUN] --apply-only: rules would be (re)applied on $DETECTED_FW."
+    else
+      apply_firewall_rules "$DETECTED_FW"
+    fi
+    exit 0
+  fi
+  # Fallthrough: continue with the full pipeline below.
 fi
 
 # --- HTTP source warning ---

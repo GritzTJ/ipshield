@@ -463,6 +463,16 @@ else
 fi
 
 echo ""
+log "${PREFIX}--- systemd apply service ---"
+apply_service_preview="/etc/systemd/system/ipshield-apply.service"
+if [ -f "$apply_service_preview" ]; then
+  echo "  $apply_service_preview"
+  [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to disable and remove it."
+else
+  echo "  (none)"
+fi
+
+echo ""
 log "${PREFIX}--- nftables.service drop-in ---"
 nft_dropin_preview="/etc/systemd/system/nftables.service.d/ipshield.conf"
 if [ -f "$nft_dropin_preview" ]; then
@@ -603,6 +613,22 @@ if [ -f "$restore_service" ]; then
     log "ipshield-restore.service removed."
   else
     log "ipshield-restore.service kept."
+  fi
+fi
+
+# --- Optional apply service removal ---
+apply_service="/etc/systemd/system/ipshield-apply.service"
+if [ -f "$apply_service" ]; then
+  echo ""
+  log "ipshield systemd apply service found:"
+  echo "    $apply_service"
+  if ask_yes_no "Disable and remove it?" yes; then
+    systemctl disable --now ipshield-apply.service 2>/dev/null || true
+    rm -f "$apply_service"
+    systemctl daemon-reload 2>/dev/null || true
+    log "ipshield-apply.service removed."
+  else
+    log "ipshield-apply.service kept."
   fi
 fi
 

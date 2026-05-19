@@ -36,6 +36,7 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 - **Whitelist** of trusted IPs/subnets (management, jump hosts) with prefix-width safeguard against accidental `0.0.0.0/0`
 - **Zero-downtime updates** via atomic ipset swap
 - **Boot-safe ipset persistence** for persistent firewalls (`ufw`, `firewalld`, `nftables`)
+- **Fast boot recovery**: `ipshield-apply.service` (ordered `After=docker.service`) attaches blocklist rules to the restored ipset within seconds of Docker being up, closing the historical ~70s exposure window between Docker exposing ports and the `cron @reboot` (since removed) reapplying rules. Falls back to a full update if the ipset save is missing
 - **Guided setup**: `setup-firewall.sh` installs the firewall, configures the cron, drops the rsyslog filter and logrotate configs
 - **Cached lookup helper**: `lookup-ip.sh` can identify which source lists an IP without re-downloading every source on each call
 - **Clean uninstall** with dry-run preview and confirmation
@@ -163,6 +164,7 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 - **Whitelist** d'IP/subnets de confiance (management, bastions) avec garde-fou de préfixe pour empêcher un `0.0.0.0/0` accidentel
 - **Mise à jour sans interruption** par swap atomique d'ipset
 - **Persistance ipset au boot** pour les firewalls persistants (`ufw`, `firewalld`, `nftables`)
+- **Récupération rapide au boot** : `ipshield-apply.service` (ordonné `After=docker.service`) attache les règles blocklist à l'ipset restauré quelques secondes après le démarrage de Docker, ce qui ferme l'ancienne fenêtre d'exposition d'environ 70 s entre l'ouverture des ports Docker et la réapplication par le `cron @reboot` (désormais supprimé). Fallback automatique vers un update complet si la sauvegarde ipset manque
 - **Installation guidée** : `setup-firewall.sh` installe le firewall, configure le cron, dépose le filtre rsyslog et les configs logrotate
 - **Lookup avec cache** : `lookup-ip.sh` identifie la source qui référence une IP sans retélécharger toutes les listes à chaque appel
 - **Désinstallation propre** avec mode dry-run et confirmation

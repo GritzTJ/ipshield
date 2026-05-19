@@ -463,6 +463,16 @@ else
 fi
 
 echo ""
+log "${PREFIX}--- nftables.service drop-in ---"
+nft_dropin_preview="/etc/systemd/system/nftables.service.d/ipshield.conf"
+if [ -f "$nft_dropin_preview" ]; then
+  echo "  $nft_dropin_preview"
+  [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to remove it (restores default ExecStop)."
+else
+  echo "  (none)"
+fi
+
+echo ""
 log "${PREFIX}--- safe-ports persistence ---"
 safe_ports_service_preview="/etc/systemd/system/ipshield-safe-ports.service"
 safe_ports_artifacts=()
@@ -593,6 +603,25 @@ if [ -f "$restore_service" ]; then
     log "ipshield-restore.service removed."
   else
     log "ipshield-restore.service kept."
+  fi
+fi
+
+# --- Optional nftables persistence drop-in removal ---
+nft_dropin_path="/etc/systemd/system/nftables.service.d/ipshield.conf"
+nft_dropin_dir="$(dirname "$nft_dropin_path")"
+if [ -f "$nft_dropin_path" ]; then
+  echo ""
+  log "ipshield nftables.service drop-in found:"
+  echo "    $nft_dropin_path"
+  log "Note: removing this restores the default ExecStop=nft flush ruleset,"
+  log "which will wipe iptables-nft tables on the next systemctl restart."
+  if ask_yes_no "Remove the drop-in?" yes; then
+    rm -f "$nft_dropin_path"
+    rmdir "$nft_dropin_dir" 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+    log "nftables.service drop-in removed."
+  else
+    log "nftables.service drop-in kept."
   fi
 fi
 

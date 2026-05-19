@@ -1024,16 +1024,50 @@ firewall_transition_is_safe_for_docker() {
   [ "$current" = "$target_backend" ] || return 1
 }
 
-# Comment out 'flush ruleset' in /etc/nftables.conf so that systemctl start
-# nftables does not wipe the iptables-nft rules Docker maintains in-kernel.
-# Idempotent. Original kept as /etc/nftables.conf.ipshield.bak on first patch.
-ensure_nftables_conf_docker_safe() {
+# Make nftables.service restart-safe: protect the iptables-nft 'ip filter'
+# table (which holds ipshield's blocklist LOG/DROP rules and any Docker
+# rules) from being wiped on every 'systemctl restart nftables' -- which
+# happens at boot, on nftables package upgrades, and on manual restarts.
+#
+# Two complementary patches:
+#  1) Comment out 'flush ruleset' in /etc/nftables.conf so the ExecStart
+#     reload of the conf no longer wipes existing tables.
+#  2) Install a systemd drop-in at
+#     /etc/systemd/system/nftables.service.d/ipshield.conf that clears
+#     ExecStop= (the default unit ships ExecStop=/usr/sbin/nft flush
+#     ruleset, which runs before ExecStart on every restart and is the
+#     actual wipe trigger).
+#
+# Without (2), patching only the conf is ineffective for restarts: ExecStop
+# fires the flush before ExecStart re-reads the conf. Idempotent. Original
+# nftables.conf kept as .ipshield.bak on first patch.
+ensure_nftables_persistent_safe() {
   local conf=/etc/nftables.conf
-  [ -f "$conf" ] || return 0
-  grep -qE '^[[:space:]]*flush ruleset' "$conf" || return 0
-  cp "$conf" "${conf}.ipshield.bak"
-  sed -i 's|^\([[:space:]]*\)flush ruleset|\1# flush ruleset  # disabled by ipshield: would clear Docker rules|' "$conf"
-  log "Patched $conf to preserve Docker rules on nftables.service start (backup: ${conf}.ipshield.bak)."
+  if [ -f "$conf" ] && grep -qE '^[[:space:]]*flush ruleset' "$conf"; then
+    cp "$conf" "${conf}.ipshield.bak"
+    sed -i 's|^\([[:space:]]*\)flush ruleset|\1# flush ruleset  # disabled by ipshield: preserves iptables-nft blocklist rules across nftables restarts|' "$conf"
+    log "Patched $conf to preserve iptables-nft rules on nftables.service restart (backup: ${conf}.ipshield.bak)."
+  fi
+
+  local dropin_dir=/etc/systemd/system/nftables.service.d
+  local dropin_path="$dropin_dir/ipshield.conf"
+  local dropin_content="# Installed by ipshield (setup-firewall.sh).
+# Clears the default ExecStop=/usr/sbin/nft flush ruleset which would
+# otherwise wipe the iptables-nft 'ip filter' table (holding ipshield's
+# blocklist LOG/DROP rules and any Docker rules) on every systemctl
+# restart of nftables. Combined with the 'flush ruleset' comment-out in
+# /etc/nftables.conf, this makes restarts non-destructive for ipshield.
+[Service]
+ExecStop="
+
+  mkdir -p "$dropin_dir"
+  if [ -f "$dropin_path" ] && [ "$(cat "$dropin_path")" = "$dropin_content" ]; then
+    return 0
+  fi
+  printf '%s\n' "$dropin_content" > "$dropin_path"
+  chmod 644 "$dropin_path"
+  systemctl daemon-reload
+  log "Installed $dropin_path (neutralises nftables.service ExecStop flush)."
 }
 
 # --- Listening TCP/UDP ports detection (non-loopback) ---
@@ -1345,6 +1379,10 @@ if [ "$FIREWALL" = "$DETECTED" ]; then
     ensure_iptables_backend legacy
   elif [ "$FIREWALL" = "nftables" ]; then
     ensure_iptables_backend nft
+    # Retro-apply the flush ruleset patch on existing installs that
+    # predate this change (or that ran setup-firewall.sh before Docker
+    # was installed). Idempotent; no-op if already patched or absent.
+    ensure_nftables_persistent_safe
   fi
   restart_docker_after_firewall_transition || exit 1
   log "$FIREWALL is already active on this system (no transition needed)."
@@ -1519,9 +1557,11 @@ case "$FIREWALL" in
     ;;
   nftables)
     ensure_iptables_backend nft
-    if docker_iptables_chains_present && docker_active; then
-      ensure_nftables_conf_docker_safe
-    fi
+    # Always patch /etc/nftables.conf to drop 'flush ruleset': the wipe
+    # destroys iptables-nft blocklist rules on every restart regardless
+    # of Docker being present. The Docker case was the original trigger
+    # but the issue is broader (boot, upgrade, manual restart).
+    ensure_nftables_persistent_safe
     systemctl enable nftables
     systemctl start nftables
     ensure_safe_ports_open "$FIREWALL" "$SAFE_PORTS"

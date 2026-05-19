@@ -104,6 +104,7 @@ if [ "${#WHITELIST_SET_NAME}" -gt 31 ]; then
 fi
 : "${PERSIST_IPSET:=1}"
 : "${IPSET_SAVE_FILE:=/var/lib/ipshield/ipset.save}"
+: "${SOURCE_CACHE_DIR:=/var/lib/ipshield/sources}"
 
 # --- Lock shared with update-blocklist.sh (anti-race against cron) ---
 # Without this lock, an update-blocklist.sh cron run could re-create the rules
@@ -450,10 +451,21 @@ fi
 if [ -n "${IPSET_SAVE_FILE:-}" ] && [ -f "$IPSET_SAVE_FILE" ]; then
   data_files+=("$IPSET_SAVE_FILE")
 fi
-if [ "${#data_files[@]}" -gt 0 ]; then
+# Per-source LKG cache: list the directory if it exists with content.
+source_cache_present=0
+if [ -n "${SOURCE_CACHE_DIR:-}" ] && [ -d "$SOURCE_CACHE_DIR" ]; then
+  if [ -n "$(ls -A "$SOURCE_CACHE_DIR" 2>/dev/null || true)" ]; then
+    source_cache_present=1
+  fi
+fi
+if [ "${#data_files[@]}" -gt 0 ] || [ "$source_cache_present" -eq 1 ]; then
   for f in "${data_files[@]}"; do
     echo "  $f"
   done
+  if [ "$source_cache_present" -eq 1 ]; then
+    cache_count="$(find "$SOURCE_CACHE_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l)"
+    echo "  $SOURCE_CACHE_DIR/ ($cache_count cached source file(s))"
+  fi
   [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to remove them."
 else
   echo "  (none)"
@@ -730,12 +742,15 @@ if [ -n "$other_cron" ]; then
 fi
 
 # --- Optional config + persistence file removal ---
-if [ "${#data_files[@]}" -gt 0 ]; then
+if [ "${#data_files[@]}" -gt 0 ] || [ "$source_cache_present" -eq 1 ]; then
   echo ""
   log "ipshield configuration + persistence files found:"
   for f in "${data_files[@]}"; do
     echo "    $f"
   done
+  if [ "$source_cache_present" -eq 1 ]; then
+    echo "    $SOURCE_CACHE_DIR/ (per-source last-known-good cache)"
+  fi
   if ask_yes_no "Remove them?" yes; then
     for f in "${data_files[@]}"; do
       if rm -f "$f" 2>/dev/null; then
@@ -744,6 +759,13 @@ if [ "${#data_files[@]}" -gt 0 ]; then
         err "  Cannot remove $f."
       fi
     done
+    if [ "$source_cache_present" -eq 1 ]; then
+      # Strip the LKG cache contents and the dir itself. Keep the operation
+      # scoped: only touch the configured path (never recurse blindly).
+      find "$SOURCE_CACHE_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
+      rmdir "$SOURCE_CACHE_DIR" 2>/dev/null || true
+      log "  $SOURCE_CACHE_DIR/ removed."
+    fi
     # Drop the persistence parent directory only when empty: leftover empty
     # /var/lib/ipshield/ was visible after the runtime uninstall on the VM.
     if [ -n "${IPSET_SAVE_FILE:-}" ]; then

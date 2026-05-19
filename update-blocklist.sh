@@ -210,6 +210,30 @@ if [ "$PERSIST_IPSET" -eq 1 ]; then
   fi
 fi
 
+# --- Per-source resilience validation ---
+# SOURCE_CACHE_DIR: where last-known-good per-source normalised data is kept.
+# SOURCE_MIN_RATIO: fraction of the previous good count below which the new
+#   download is suspected to be degraded; the cached copy is used instead. 0
+#   disables the degradation check (cache only kicks in on download failure).
+# SOURCE_CACHE_MAX_AGE: when the cache is older than this (days), the new
+#   data is trusted even if degraded -- prevents permanent stickiness when a
+#   source legitimately shrinks.
+: "${SOURCE_CACHE_DIR:=/var/lib/ipshield/sources}"
+: "${SOURCE_MIN_RATIO:=0.5}"
+: "${SOURCE_CACHE_MAX_AGE:=14}"
+if [[ "$SOURCE_CACHE_DIR" != /* ]] || [[ "$SOURCE_CACHE_DIR" =~ [[:space:]] ]]; then
+  echo "Error: SOURCE_CACHE_DIR invalid ('$SOURCE_CACHE_DIR'). Absolute path without whitespace expected." >&2
+  exit 1
+fi
+if ! [[ "$SOURCE_MIN_RATIO" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]]; then
+  echo "Error: SOURCE_MIN_RATIO invalid ('$SOURCE_MIN_RATIO'). Decimal in [0, 1] expected." >&2
+  exit 1
+fi
+if ! [[ "$SOURCE_CACHE_MAX_AGE" =~ ^[0-9]+$ ]]; then
+  echo "Error: SOURCE_CACHE_MAX_AGE invalid ('$SOURCE_CACHE_MAX_AGE'). Non-negative integer (days) expected." >&2
+  exit 1
+fi
+
 # --- Derived variables ---
 IPSET_TYPE="hash:net"
 IPSET_FAMILY="inet"
@@ -954,6 +978,8 @@ need_cmd flock
 need_cmd wc
 need_cmd date
 need_cmd comm
+need_cmd sha256sum
+need_cmd stat
 
 # --- Lock ---
 mkdir -p "$LOCK_DIR"
@@ -1053,12 +1079,10 @@ for i in "${!URLS[@]}"; do
 done
 
 # --- Failure policy ---
-if [ "$ok" -eq 0 ]; then
-  err "Error: no source available. Aborting update."
-  exit 1
-fi
+# Downloads that failed will be retried from the last-known-good cache below.
+# A truly hopeless run (all failures + no cache) aborts after the LKG loop.
 if [ "$fail" -ne 0 ]; then
-  err "Warning: $fail source(s) unavailable. Updating with $ok available source(s)."
+  err "Warning: $fail source(s) unavailable. Will try last-known-good cache."
 fi
 
 # --- Sequential processing: fused awk (extraction + validation) + per-source stats ---
@@ -1107,13 +1131,98 @@ function is_bogon(addr) {
 }
 '
 
-for i in "${DL_OK[@]}"; do
-  awk -v min_prefix="$BLOCKLIST_MIN_PREFIX" "$AWK_PROG" "${TMP_DIR}/dl.${i}" > "${TMP_DIR}/src.${i}"
-  src_count="$(wc -l < "${TMP_DIR}/src.${i}")"
+# --- Per-source normalisation + last-known-good cache ---
+# For each URL: normalise the freshly downloaded data, compare its line count
+# to the cached last good count, and fall back to the cache when the source
+# is degraded or unreachable. A stale cache (older than SOURCE_CACHE_MAX_AGE
+# days) is bypassed so a legitimately shrinking source eventually wins.
+if [ "$DRY_RUN" -eq 0 ]; then
+  mkdir -p "$SOURCE_CACHE_DIR"
+  chmod 700 "$SOURCE_CACHE_DIR"
+fi
+
+# Build a quick lookup table for DL_OK indices.
+declare -A DL_OK_MAP=()
+for ok_i in "${DL_OK[@]}"; do
+  DL_OK_MAP[$ok_i]=1
+done
+
+declare -a SOURCES_USED=()
+now_ts="$(date +%s)"
+
+for i in "${!URLS[@]}"; do
+  url="${URLS[$i]}"
+  url_hash="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
+  cache_file="${SOURCE_CACHE_DIR}/${url_hash}.list"
+  src_out="${TMP_DIR}/src.${i}"
+
+  new_count=0
+  if [ -n "${DL_OK_MAP[$i]:-}" ]; then
+    awk -v min_prefix="$BLOCKLIST_MIN_PREFIX" "$AWK_PROG" "${TMP_DIR}/dl.${i}" > "$src_out"
+    new_count="$(wc -l < "$src_out")"
+  fi
+
+  use_cache_reason=""
+  update_cache=0
+
+  if [ -z "${DL_OK_MAP[$i]:-}" ]; then
+    use_cache_reason="download failed"
+  elif [ "$new_count" -eq 0 ]; then
+    use_cache_reason="download yielded 0 valid entries"
+  elif [ -f "$cache_file" ] && [ -s "$cache_file" ]; then
+    last_count="$(wc -l < "$cache_file")"
+    threshold="$(awk -v lc="$last_count" -v r="$SOURCE_MIN_RATIO" 'BEGIN{printf "%d", lc*r}')"
+    if [ "$new_count" -lt "$threshold" ]; then
+      cache_mtime="$(stat -c %Y "$cache_file" 2>/dev/null || echo 0)"
+      cache_age_days=$(( (now_ts - cache_mtime) / 86400 ))
+      if [ "$cache_age_days" -ge "$SOURCE_CACHE_MAX_AGE" ]; then
+        err "Warning: source $url degraded ($(fmt_num "$new_count") entries < $(fmt_num "$threshold"); last good $(fmt_num "$last_count")), but cache is stale (${cache_age_days}d >= ${SOURCE_CACHE_MAX_AGE}d). Refreshing baseline with new data."
+        update_cache=1
+      else
+        use_cache_reason="degraded ($(fmt_num "$new_count") entries < $(fmt_num "$threshold") = $(fmt_num "$last_count") x $SOURCE_MIN_RATIO)"
+      fi
+    else
+      update_cache=1
+    fi
+  else
+    update_cache=1
+  fi
+
+  if [ -n "$use_cache_reason" ]; then
+    if [ -f "$cache_file" ] && [ -s "$cache_file" ]; then
+      cache_mtime="$(stat -c %Y "$cache_file" 2>/dev/null || echo 0)"
+      cache_age_days=$(( (now_ts - cache_mtime) / 86400 ))
+      if [ "$cache_age_days" -ge "$SOURCE_CACHE_MAX_AGE" ]; then
+        err "Error: source $url $use_cache_reason; cached LKG is stale (${cache_age_days}d >= ${SOURCE_CACHE_MAX_AGE}d). Excluding this source."
+        rm -f "$src_out"
+        continue
+      fi
+      cp "$cache_file" "$src_out"
+      cached_count="$(wc -l < "$src_out")"
+      err "Warning: source $url $use_cache_reason; using cached LKG ($(fmt_num "$cached_count") entries, ${cache_age_days}d old)."
+    else
+      err "Error: source $url $use_cache_reason; no cached LKG available. Excluding this source."
+      rm -f "$src_out"
+      continue
+    fi
+  elif [ "$update_cache" -eq 1 ] && [ "$DRY_RUN" -eq 0 ]; then
+    cache_tmp="$(mktemp -p "$SOURCE_CACHE_DIR" ".${url_hash}.XXXXXX")"
+    cp "$src_out" "$cache_tmp"
+    chmod 600 "$cache_tmp"
+    mv "$cache_tmp" "$cache_file"
+  fi
+
+  SOURCES_USED+=("$i")
+  src_count="$(wc -l < "$src_out")"
   if [ "$VERBOSE" -eq 1 ]; then
-    log "  Source $((i+1))/${#URLS[@]}: $(fmt_num "$src_count") valid entries -- ${URLS[$i]}"
+    log "  Source $((i+1))/${#URLS[@]}: $(fmt_num "$src_count") valid entries -- ${url}"
   fi
 done
+
+if [ "${#SOURCES_USED[@]}" -eq 0 ]; then
+  err "Error: no source produced data (downloads failed and no usable cached LKG). Aborting update."
+  exit 1
+fi
 
 # --- WHITELIST entries validation (same rules as external lists) ---
 if [ "${#WHITELIST[@]}" -gt 0 ]; then

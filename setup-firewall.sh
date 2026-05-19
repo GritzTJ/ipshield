@@ -656,12 +656,20 @@ configure_ipset_restore() {
     return 1
   fi
 
-  local ipset_bin service_path unit_content save_dir
+  local ipset_bin service_path unit_content save_dir source_cache_dir
   ipset_bin="$(command -v ipset)"
   service_path="/etc/systemd/system/ipshield-restore.service"
   save_dir="$(dirname "$save_file")"
   mkdir -p "$save_dir"
   chmod 700 "$save_dir"
+
+  # Pre-create the per-source LKG cache dir under the same root so
+  # update-blocklist.sh can write atomically on its first run.
+  source_cache_dir="${SOURCE_CACHE_DIR:-/var/lib/ipshield/sources}"
+  if [[ "$source_cache_dir" == /* ]] && [[ "$source_cache_dir" != *[[:space:]]* ]]; then
+    mkdir -p "$source_cache_dir"
+    chmod 700 "$source_cache_dir"
+  fi
 
   unit_content="[Unit]
 Description=Restore ipshield ipsets before firewall start

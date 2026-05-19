@@ -107,3 +107,23 @@ IPSET_SAVE_FILE="/var/lib/ipshield/ipset.save"
 # TTL in seconds for downloaded source cache used by lookup-ip.sh.
 # Default: 21600 seconds (6 hours). Set to 0 to disable cache.
 LOOKUP_CACHE_TTL=21600
+
+# --- Per-source resilience (last-known-good cache) ---
+# Each source's normalised entries are cached so a transient failure
+# (download error, source returning an empty/HTML body, dramatic shrinkage)
+# falls back to the previous good snapshot instead of disappearing silently
+# from the merged blacklist.
+#
+# SOURCE_CACHE_DIR: where per-source caches are stored (one file per URL,
+#                   named by the sha256 of the URL). Defaults to a sibling of
+#                   the ipset save directory.
+# SOURCE_MIN_RATIO: if a source returns fewer than (last_good * ratio)
+#                   entries, treat it as degraded and use the cached copy.
+#                   Default 0.5. Set to 0 to disable the degradation check
+#                   (cache then only kicks in on outright download failure).
+# SOURCE_CACHE_MAX_AGE: when the cache is older than this many days, trust
+#                   the new data even if degraded -- prevents permanent
+#                   stickiness if a source legitimately shrinks. Default 14.
+SOURCE_CACHE_DIR="/var/lib/ipshield/sources"
+SOURCE_MIN_RATIO=0.5
+SOURCE_CACHE_MAX_AGE=14

@@ -1141,6 +1141,30 @@ if [ "$DRY_RUN" -eq 0 ]; then
   chmod 700 "$SOURCE_CACHE_DIR"
 fi
 
+# Build the set of currently-active source hashes so we can prune orphan
+# cache files left behind when the admin removes a URL from the config.
+declare -A ACTIVE_HASHES=()
+for url in "${URLS[@]}"; do
+  h="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
+  ACTIVE_HASHES[$h]=1
+done
+
+if [ -d "$SOURCE_CACHE_DIR" ]; then
+  shopt -s nullglob
+  for cache_path in "$SOURCE_CACHE_DIR"/*.list; do
+    base="$(basename "$cache_path" .list)"
+    if [ -z "${ACTIVE_HASHES[$base]:-}" ]; then
+      if [ "$DRY_RUN" -eq 1 ]; then
+        log "[DRY-RUN] LKG cache: orphan $cache_path would be removed (URL no longer in config)."
+      else
+        rm -f "$cache_path"
+        log "Removed orphan LKG cache: $cache_path (URL no longer in config)."
+      fi
+    fi
+  done
+  shopt -u nullglob
+fi
+
 # Build a quick lookup table for DL_OK indices.
 declare -A DL_OK_MAP=()
 for ok_i in "${DL_OK[@]}"; do

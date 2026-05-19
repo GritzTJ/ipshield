@@ -463,6 +463,22 @@ else
 fi
 
 echo ""
+log "${PREFIX}--- safe-ports persistence ---"
+safe_ports_service_preview="/etc/systemd/system/ipshield-safe-ports.service"
+safe_ports_artifacts=()
+[ -f "$safe_ports_service_preview" ] && safe_ports_artifacts+=("$safe_ports_service_preview")
+[ -f /etc/ipshield/safe-ports.nft ] && safe_ports_artifacts+=("/etc/ipshield/safe-ports.nft")
+[ -f /etc/ipshield/safe-ports.v4 ] && safe_ports_artifacts+=("/etc/ipshield/safe-ports.v4")
+if [ "${#safe_ports_artifacts[@]}" -gt 0 ]; then
+  for f in "${safe_ports_artifacts[@]}"; do
+    echo "  $f"
+  done
+  [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to disable and remove them."
+else
+  echo "  (none)"
+fi
+
+echo ""
 log "${PREFIX}--- Cron ---"
 cron_files="$(grep -lE "update-blocklist\.sh" /etc/crontab /etc/cron.d/* /var/spool/cron/* /var/spool/cron/crontabs/* 2>/dev/null || true)"
 if [ -n "$cron_files" ]; then
@@ -613,13 +629,16 @@ fi
 # --- Optional cron line removal ---
 if command -v crontab >/dev/null 2>&1; then
   current_cron="$(crontab -l 2>/dev/null || true)"
-  ipshield_lines="$(printf '%s\n' "$current_cron" | grep -E "update-blocklist\.sh" || true)"
+  ipshield_lines="$(printf '%s\n' "$current_cron" | grep -E "update-blocklist\.sh|^[[:space:]]*# ipshield cron (begin|end)$" || true)"
   if [ -n "$ipshield_lines" ]; then
     echo ""
     log "ipshield cron lines found in root's crontab:"
     echo "$ipshield_lines" | awk '{print "    " $0}'
     if ask_yes_no "Remove them?" yes; then
-      new_cron="$(printf '%s\n' "$current_cron" | grep -vE "update-blocklist\.sh" || true)"
+      # Strip both the executable lines and the marker comments installed by
+      # setup-firewall.sh (# ipshield cron begin / end). Orphan markers were
+      # left behind by the previous grep -v pattern.
+      new_cron="$(printf '%s\n' "$current_cron" | grep -vE "update-blocklist\.sh|^[[:space:]]*# ipshield cron (begin|end)$" || true)"
       new_cron="${new_cron%$'\n'}"
       if [ -z "$new_cron" ]; then
         crontab -r 2>/dev/null || true
@@ -657,6 +676,16 @@ if [ "${#data_files[@]}" -gt 0 ]; then
         err "  Cannot remove $f."
       fi
     done
+    # Drop the persistence parent directory only when empty: leftover empty
+    # /var/lib/ipshield/ was visible after the runtime uninstall on the VM.
+    if [ -n "${IPSET_SAVE_FILE:-}" ]; then
+      save_dir="$(dirname "$IPSET_SAVE_FILE")"
+      case "$save_dir" in
+        /var/lib/ipshield|/var/lib/ipshield/)
+          rmdir "$save_dir" 2>/dev/null || true
+          ;;
+      esac
+    fi
   else
     log "Configuration + persistence files kept."
   fi

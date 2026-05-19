@@ -371,37 +371,25 @@ detect_firewall() {
 
 DETECTED="$(detect_firewall)"
 
-# Resolve the path to update-blocklist.sh used by cron and by the
-# ipshield-apply.service unit. Source of truth, in order:
-#  1) Existing crontab (prefers what the user picked on a prior install).
-#  2) An existing ipshield-apply.service unit file (rerun without cron).
+# Resolve the path to update-blocklist.sh used by the systemd units.
+# Source of truth, in order:
+#  1) An existing ipshield.service unit file.
+#  2) An existing ipshield-apply.service unit file.
 #  3) Same directory as setup-firewall.sh (the typical fresh install layout).
 # Returns the resolved path on stdout (empty string if none of the
-# candidates points to an executable file). configure_cron prompts the
-# user with this value as the default; configure_apply_service uses it
-# silently and falls back to a prompt only on detection failure.
+# candidates points to an executable file).
 detect_update_script_path() {
-  local current_cron candidate script_dir
-  current_cron="$(crontab -l 2>/dev/null || true)"
-  # Crontab lines quote the script path with single quotes. Embedded single
-  # quotes are escaped as '\''; we don't unescape them because such paths
-  # would also break the cron syntax in practice.
-  candidate="$(printf '%s\n' "$current_cron" \
-    | grep -oE "'[^']*update-blocklist\.sh'" \
-    | head -1 \
-    | sed "s|^'||; s|'$||")"
-  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-    echo "$candidate"
-    return 0
-  fi
-  if [ -f /etc/systemd/system/ipshield-apply.service ]; then
-    candidate="$(awk -F= '/^ExecStart=/{print $2; exit}' /etc/systemd/system/ipshield-apply.service \
-      | awk '{print $1}')"
-    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-      echo "$candidate"
-      return 0
+  local candidate script_dir unit
+  for unit in /etc/systemd/system/ipshield.service /etc/systemd/system/ipshield-apply.service; do
+    if [ -f "$unit" ]; then
+      candidate="$(awk -F= '/^ExecStart=/{print $2; exit}' "$unit" \
+        | awk '{print $1}')"
+      if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+        echo "$candidate"
+        return 0
+      fi
     fi
-  fi
+  done
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   candidate="$script_dir/update-blocklist.sh"
   if [ -x "$candidate" ]; then
@@ -411,92 +399,75 @@ detect_update_script_path() {
   return 1
 }
 
-# --- Cron configuration (idempotent interactive prompt) ---
-configure_cron() {
+# --- Systemd timer + service (8-hour blocklist refresh) ---
+# Replaces the historical root crontab entry. The timer fires:
+#   - 2 minutes after boot (catches a freshly booted machine; ipshield-apply
+#     has already reattached the rules in parallel from the cached ipset),
+#   - then at 00:00, 08:00, 16:00 every day with a 5-minute jitter,
+#   - Persistent=true catches up a missed run if the machine was off at the
+#     scheduled time.
+# Stdout/stderr are captured by journald; check via:
+#   journalctl -u ipshield.service
+configure_timer() {
+  local service_path="/etc/systemd/system/ipshield.service"
+  local timer_path="/etc/systemd/system/ipshield.timer"
+  local script_path
+
   echo ""
-  log "Configuring ipshield cron (12-hour blocklist refresh)..."
+  log "Configuring ipshield.timer (8-hour blocklist refresh)..."
 
-  # Check that crontab is available
-  if ! command -v crontab >/dev/null 2>&1; then
-    err "'crontab' command not available -- install cron manually."
-    return 0
-  fi
-
-  # Initial crontab read (reused for default path + filter).
-  # `|| true`: crontab -l returns 1 if no user crontab; do not let set -e exit.
-  local current_cron
-  current_cron="$(crontab -l 2>/dev/null || true)"
-
-  # Default path: pulled from the existing crontab if present, otherwise from
-  # this script's directory. The boot-time reapply is handled by
-  # ipshield-apply.service (After=docker.service), so the cron only carries
-  # the 12-hour refresh schedule; the historical @reboot line is removed.
-  local script_path log_path mailto
   script_path="$(detect_update_script_path)"
-  if [ -z "$script_path" ]; then
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    script_path="$script_dir/update-blocklist.sh"
-  fi
-  if [ ! -x "$script_path" ]; then
-    err "$script_path does not exist or is not executable. Cron not configured."
+  if [ -z "$script_path" ] || [ ! -x "$script_path" ]; then
+    err "Cannot locate an executable update-blocklist.sh. Timer not configured."
     return 0
   fi
 
-  log_path="/var/log/update-blocklist.log"
-  # MAILTO is not configured automatically. To set it, edit the root crontab
-  # (`crontab -e`) and add `MAILTO=you@example.com` inside the ipshield block.
-  mailto=""
+  local service_content="[Unit]
+Description=ipshield blocklist refresh
+After=network-online.target
+Wants=network-online.target
 
-  # Filter existing ipshield lines (by basename), plus marker blocks. The
-  # basename filter also strips any pre-existing `@reboot sleep N && ...`
-  # line installed by older setup-firewall.sh versions, migrating existing
-  # installs to the ipshield-apply.service model automatically.
-  # Do not remove global MAILTO lines from the user's crontab: cron variables
-  # are positional and may apply to unrelated jobs.
-  local filtered_cron new_lines new_cron script_cmd log_cmd
-  local script_basename
-  script_basename="$(basename "$script_path")"
+[Service]
+Type=oneshot
+ExecStart=$script_path"
 
-  filtered_cron="$(printf '%s\n' "$current_cron" | awk -v base="$script_basename" '
-    /^[[:space:]]*# ipshield cron begin$/ { skip=1; next }
-    /^[[:space:]]*# ipshield cron end$/ { skip=0; next }
-    skip { next }
-    index($0, base) { next }
-    { print }
-  ')"
-  filtered_cron="${filtered_cron%$'\n'}"
+  local timer_content="[Unit]
+Description=ipshield blocklist refresh schedule
 
-  # New lines
-  shell_quote() {
-    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
-  }
-  script_cmd="$(shell_quote "$script_path")"
-  log_cmd="$(shell_quote "$log_path")"
-  new_lines="# ipshield cron begin"$'\n'
-  [ -n "$mailto" ] && new_lines+="MAILTO=$mailto"$'\n'
-  new_lines+="0 */12 * * * $script_cmd >> $log_cmd 2>&1"$'\n'
-  new_lines+="# ipshield cron end"
+[Timer]
+OnBootSec=2min
+OnCalendar=*-*-* 00,08,16:00:00
+RandomizedDelaySec=5min
+Persistent=true
+Unit=ipshield.service
 
-  # Concatenation
-  if [ -n "$filtered_cron" ]; then
-    new_cron="${filtered_cron}"$'\n'"${new_lines}"
+[Install]
+WantedBy=timers.target"
+
+  local changed=0
+  if [ -f "$service_path" ] && [ "$(cat "$service_path")" = "$service_content" ]; then
+    log "ipshield.service already up-to-date."
   else
-    new_cron="$new_lines"
+    printf '%s\n' "$service_content" > "$service_path"
+    chmod 644 "$service_path"
+    log "Installed $service_path"
+    changed=1
   fi
 
-  if [ "$current_cron" = "$new_cron" ]; then
-    log "Cron already up-to-date."
-    return 0
+  if [ -f "$timer_path" ] && [ "$(cat "$timer_path")" = "$timer_content" ]; then
+    log "ipshield.timer already up-to-date."
+  else
+    printf '%s\n' "$timer_content" > "$timer_path"
+    chmod 644 "$timer_path"
+    log "Installed $timer_path"
+    changed=1
   fi
 
-  echo ""
-  echo "=== ipshield cron block ==="
-  echo "$new_lines"
-  echo ""
-
-  printf '%s\n' "$new_cron" | crontab -
-  log "Crontab updated."
+  if [ "$changed" -eq 1 ]; then
+    systemctl daemon-reload
+  fi
+  systemctl enable --now ipshield.timer >/dev/null 2>&1 || true
+  log "ipshield.timer enabled (next runs: 00:00, 08:00, 16:00 + boot)."
 }
 
 # --- Helper: install or update a config file ---
@@ -1455,11 +1426,11 @@ if [ "$FIREWALL" = "$DETECTED" ]; then
   fi
   configure_conf
   configure_ipset_restore
-  configure_cron
+  configure_timer
   configure_apply_service
   configure_logs
   echo ""
-  log "Now run update-blocklist.sh for the first update; the cron will take over afterwards."
+  log "Now run update-blocklist.sh for the first update; ipshield.timer will take over afterwards."
   exit 0
 fi
 
@@ -1682,9 +1653,9 @@ log "$FIREWALL installed and enabled successfully."
 
 configure_conf
 configure_ipset_restore
-configure_cron
+configure_timer
 configure_apply_service
 configure_logs
 
 echo ""
-log "Now run update-blocklist.sh for the first update; the cron will take over afterwards."
+log "Now run update-blocklist.sh for the first update; ipshield.timer will take over afterwards."

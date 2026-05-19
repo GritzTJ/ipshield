@@ -26,12 +26,10 @@ This script:
     and DOCKER-USER (if Docker is present);
   - destroys ipsets $SET_NAME and $WHITELIST_SET_NAME;
   - removes ipshield/orphan rules from /etc/ufw/before.rules line by line (ufw);
-  - removes ipshield-restore.service, ipshield-apply.service,
-    ipshield-safe-ports.service, the nftables.service drop-in, and the
-    safe-ports configuration files;
+  - removes ipshield.timer, ipshield.service, ipshield-restore.service,
+    ipshield-apply.service, ipshield-safe-ports.service, the
+    nftables.service drop-in, and the safe-ports configuration files;
   - restores /etc/nftables.conf from its .ipshield.bak backup when present;
-  - removes ipshield cron lines from root's crontab; reports (without
-    modifying) lines in /etc/crontab and /etc/cron.d/*;
   - removes the rsyslog filter (30-blocked-ips.conf) and logrotate configs;
   - optionally removes /etc/update-blocklist.conf and the ipset save file
     (separate prompt -- user-editable data);
@@ -106,8 +104,8 @@ fi
 : "${IPSET_SAVE_FILE:=/var/lib/ipshield/ipset.save}"
 : "${SOURCE_CACHE_DIR:=/var/lib/ipshield/sources}"
 
-# --- Lock shared with update-blocklist.sh (anti-race against cron) ---
-# Without this lock, an update-blocklist.sh cron run could re-create the rules
+# --- Lock shared with update-blocklist.sh (anti-race against ipshield.timer) ---
+# Without this lock, a scheduled update-blocklist.sh run could re-create the rules
 # between uninstall removing them and destroying the ipsets, leaving a
 # partially-installed state.
 LOCK_DIR="/run/lock"
@@ -492,6 +490,22 @@ else
 fi
 
 echo ""
+log "${PREFIX}--- systemd timer + service ---"
+timer_preview="/etc/systemd/system/ipshield.timer"
+update_service_preview="/etc/systemd/system/ipshield.service"
+timer_artifacts=()
+[ -f "$timer_preview" ] && timer_artifacts+=("$timer_preview")
+[ -f "$update_service_preview" ] && timer_artifacts+=("$update_service_preview")
+if [ "${#timer_artifacts[@]}" -gt 0 ]; then
+  for f in "${timer_artifacts[@]}"; do
+    echo "  $f"
+  done
+  [ "$APPLY" -eq 1 ] && echo "  -> will be removed automatically."
+else
+  echo "  (none)"
+fi
+
+echo ""
 log "${PREFIX}--- nftables.service drop-in ---"
 nft_dropin_preview="/etc/systemd/system/nftables.service.d/ipshield.conf"
 if [ -f "$nft_dropin_preview" ]; then
@@ -531,23 +545,6 @@ if [ "${#safe_ports_artifacts[@]}" -gt 0 ]; then
   [ "$APPLY" -eq 1 ] && echo "  -> will be removed automatically."
 else
   echo "  (none)"
-fi
-
-echo ""
-log "${PREFIX}--- Cron ---"
-cron_files="$(grep -lE "update-blocklist\.sh" /etc/crontab /etc/cron.d/* /var/spool/cron/* /var/spool/cron/crontabs/* 2>/dev/null || true)"
-if [ -n "$cron_files" ]; then
-  echo "  Cron lines detected:"
-  echo "$cron_files" | while read -r f; do
-    echo "    --- $f ---"
-    grep -nE "update-blocklist\.sh" "$f" | awk '{print "      " $0}'
-  done
-  if [ "$APPLY" -eq 1 ]; then
-    echo "  -> ipshield lines will be removed from root's crontab automatically."
-    echo "  -> /etc/crontab and /etc/cron.d/* are never modified (do this manually)."
-  fi
-else
-  echo "  No cron line detected."
 fi
 
 echo ""
@@ -711,34 +708,16 @@ if [ -f "$safe_ports_service" ] || [ "${#safe_ports_files[@]}" -gt 0 ]; then
   log "Safe-ports persistence removed."
 fi
 
-# --- Cron line removal from root's crontab (auto) ---
-if command -v crontab >/dev/null 2>&1; then
-  current_cron="$(crontab -l 2>/dev/null || true)"
-  ipshield_lines="$(printf '%s\n' "$current_cron" | grep -E "update-blocklist\.sh|^[[:space:]]*# ipshield cron (begin|end)$" || true)"
-  if [ -n "$ipshield_lines" ]; then
-    echo ""
-    log "Removing ipshield cron lines from root's crontab..."
-    # Strip both the executable lines and the marker comments installed by
-    # setup-firewall.sh (# ipshield cron begin / end). Orphan markers were
-    # left behind by the previous grep -v pattern.
-    new_cron="$(printf '%s\n' "$current_cron" | grep -vE "update-blocklist\.sh|^[[:space:]]*# ipshield cron (begin|end)$" || true)"
-    new_cron="${new_cron%$'\n'}"
-    if [ -z "$new_cron" ]; then
-      crontab -r 2>/dev/null || true
-      log "Root's crontab cleared."
-    else
-      printf '%s\n' "$new_cron" | crontab -
-      log "Root's crontab updated (ipshield lines removed)."
-    fi
-  fi
-fi
-
-# Cron lines in /etc/crontab and /etc/cron.d/* (info only, never modified)
-other_cron="$(grep -lE "update-blocklist\.sh" /etc/crontab /etc/cron.d/* 2>/dev/null || true)"
-if [ -n "$other_cron" ]; then
+# --- systemd timer + service removal (auto) ---
+update_timer="/etc/systemd/system/ipshield.timer"
+update_service="/etc/systemd/system/ipshield.service"
+if [ -f "$update_timer" ] || [ -f "$update_service" ]; then
   echo ""
-  log "ipshield cron lines also present in (remove manually):"
-  echo "$other_cron" | awk '{print "    " $0}'
+  log "Removing ipshield.timer + ipshield.service..."
+  systemctl disable --now ipshield.timer 2>/dev/null || true
+  rm -f "$update_timer" "$update_service"
+  systemctl daemon-reload 2>/dev/null || true
+  log "ipshield.timer + ipshield.service removed."
 fi
 
 # --- Optional config + persistence file removal ---

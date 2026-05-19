@@ -108,7 +108,7 @@ The script:
 5. Installs and enables the new firewall
 6. Verifies the firewall responds after activation (otherwise rolls back)
 7. **Installs `/etc/update-blocklist.conf`** from `update-blocklist.conf.example` if missing (chmod 600, owner root). Existing files are preserved to keep user changes intact.
-8. **Offers to configure the ipshield crontab**: script path, log file, optional MAILTO. Only a `0 */12` line is generated; boot-time reapplication is handled by `ipshield-apply.service` (next step) which closes the historical ~70s exposure window. Idempotent (rerun to modify).
+8. **Installs `ipshield.timer` + `ipshield.service`**: the timer fires `OnBootSec=2min` and `OnCalendar=*-*-* 00,08,16:00:00` with `RandomizedDelaySec=5min` and `Persistent=true` (catches a missed run if the machine was off). The service is a `Type=oneshot` unit that just runs `update-blocklist.sh`. Logs go to journald (`journalctl -u ipshield.service`). Idempotent (rerun to update).
 9. **Offers to install `ipshield-apply.service`**: a systemd unit ordered `After=ipshield-restore.service nftables.service docker.service` that runs `update-blocklist.sh --apply-only` at boot. This attaches the firewall rules to the restored ipset within seconds of Docker being up, without re-downloading the blocklist. If the ipset is missing or empty (e.g. corrupted save file, `PERSIST_IPSET=0`), it falls back to a full update so the system is never left unprotected.
 10. **Offers to install the rsyslog filter + logrotate**: `30-blocked-ips.conf` to redirect `BLOCKED:` to `/var/log/blocked-ips.log`, plus two logrotate configs (rotate 4 weekly). Idempotent (compares content, only rewrites if different or absent). If rsyslog is missing (e.g. minimal Debian), a sub-prompt offers to install it or stick with journald (logs viewable via `journalctl -k --grep 'BLOCKED:'`).
 
@@ -210,7 +210,7 @@ The whitelist ipset name is `WHITELIST_SET_NAME` (`${SET_NAME}-allow` by default
 1. **`ipshield-restore.service`** (early): restores `/var/lib/ipshield/ipset.save` before `ufw.service`, `firewalld.service` and `nftables.service` start. Provides the ipset data.
 2. **`ipshield-apply.service`** (after Docker): runs `update-blocklist.sh --apply-only`, ordered `After=ipshield-restore.service nftables.service docker.service`. Skips the ~30s download/parse/swap cycle and just attaches the LOG/DROP rules (and DOCKER-USER rules, when Docker is present) to the ipset that step 1 has loaded. Falls back to a full update if the ipset save file is missing or empty (e.g. `PERSIST_IPSET=0`, corrupted file, first boot after a fresh install) so the host is never left unprotected.
 
-`update-blocklist.sh` saves the ipshield sets after each successful run when `PERSIST_IPSET=1` (default), feeding the two units above. The legacy `cron @reboot sleep 60 && update-blocklist.sh` line has been removed: the systemd ordering removes the need for an arbitrary `sleep`, and existing installs are migrated automatically on the next `setup-firewall.sh` rerun.
+`update-blocklist.sh` saves the ipshield sets after each successful run when `PERSIST_IPSET=1` (default), feeding the two units above. The recurring blocklist refresh runs through `ipshield.timer` (see "Scheduling" below); the `OnBootSec=2min` trigger replaces the legacy `@reboot sleep 60 && ...` cron line, with the systemd ordering removing the need for an arbitrary `sleep`.
 
 Relevant config:
 
@@ -246,15 +246,13 @@ iptables -S INPUT | grep blacklist-allow
 ./uninstall.sh --apply
 ```
 
-In `--apply` mode, after rules and ipsets are removed, separate prompts offer to remove:
-1. `ipshield-restore.service`;
-2. `ipshield-apply.service`;
-3. ipshield cron lines from root's crontab (the rest is preserved);
-4. `/etc/update-blocklist.conf` and the ipset persistence file, usually `/var/lib/ipshield/ipset.save`;
-5. the `/etc/rsyslog.d/30-blocked-ips.conf` and `/etc/logrotate.d/{update-blocklist,blocked-ips}` configs (rsyslog is restarted if the filter is removed);
-5. ipshield log files matching `/var/log/update-blocklist.log*` and `/var/log/blocked-ips.log*`, including rotated/compressed files.
+In `--apply` mode, after rules and ipsets are removed, the project-owned components are removed automatically (no prompt): `ipshield-restore.service`, `ipshield-apply.service`, `ipshield.timer` + `ipshield.service`, the `ipshield-safe-ports.service`, the `nftables.service` drop-in (and the `/etc/nftables.conf` restore from `.ipshield.bak`), and the `/etc/rsyslog.d/30-blocked-ips.conf` + `/etc/logrotate.d/{update-blocklist,blocked-ips}` configs (rsyslog is restarted if the filter is removed).
 
-Entries in `/etc/crontab` or `/etc/cron.d/*` are only listed (must be removed manually). Journald/kernel entries are not purged; journal vacuuming is a global system operation.
+Two prompts then offer to remove user-editable data:
+1. `/etc/update-blocklist.conf`, the ipset persistence file (usually `/var/lib/ipshield/ipset.save`), and the per-source LKG cache directory (usually `/var/lib/ipshield/sources/`);
+2. ipshield log files matching `/var/log/update-blocklist.log*` and `/var/log/blocked-ips.log*`, including rotated/compressed files.
+
+Journald entries are not purged; journal vacuuming is a global system operation.
 
 ### Docker support
 
@@ -272,8 +270,8 @@ Blocklist rules are also scoped to `conntrack --ctstate NEW`. For TCP, this mean
 
 **Notes:**
 
-- Docker recreates `DOCKER-USER` on each daemon restart — rules do not persist. `ipshield-apply.service` (at boot) and the `0 */12` cron reapply them, and idempotency avoids duplicates.
-- If the script runs at boot before Docker, `DOCKER-USER` does not exist yet — the detection is correctly negative. The next cron run picks it up.
+- Docker recreates `DOCKER-USER` on each daemon restart — rules do not persist. `ipshield-apply.service` (at boot) and `ipshield.timer` (`OnBootSec=2min` + every 8 h) reapply them, and idempotency avoids duplicates.
+- If the script runs at boot before Docker, `DOCKER-USER` does not exist yet — the detection is correctly negative. The next timer run picks it up.
 - `setup-firewall.sh` handles Docker firewall transitions interactively: when Docker chains are present, it can stop Docker, clean Docker-owned chains, continue setup, then restart Docker. If Docker reports a missing `DOCKER` chain after a manual firewall change, restart Docker so it recreates its NAT/filter chains.
 - No configuration needed if WAN auto-detection works: detection and application are fully automatic.
 
@@ -285,34 +283,64 @@ iptables -L DOCKER-USER -n -v
 
 LOG + DROP rules with `ctstate NEW`, `match-set blacklist src` and `in ens160` (or your detected WAN interface) should appear.
 
-### Cron automation
+### Scheduling (systemd timer)
 
-`setup-firewall.sh` offers crontab configuration at the end of its execution (step 8). This is the recommended method — idempotent, removes previous ipshield cron lines/marker blocks (including any legacy `@reboot sleep N && ...` line from prior versions) and preserves the rest of the crontab.
+`setup-firewall.sh` installs `ipshield.timer` + `ipshield.service` at the end of its execution (step 8). This is the recommended method — idempotent, no prompt, and `systemctl enable --now ipshield.timer` is run automatically.
 
-To reconfigure the crontab later without touching firewall rules: rerun `./setup-firewall.sh`, pick the already-active firewall, then answer `no` to the port review prompt.
+To reconfigure later without touching firewall rules: rerun `./setup-firewall.sh`, pick the already-active firewall, then answer `no` to the port review prompt.
 
-The script applies the following default schedule:
+The default schedule:
 
+```ini
+# /etc/systemd/system/ipshield.timer
+[Timer]
+OnBootSec=2min
+OnCalendar=*-*-* 00,08,16:00:00
+RandomizedDelaySec=5min
+Persistent=true
+Unit=ipshield.service
 ```
-# ipshield cron begin
-0 */12 * * * /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
-# ipshield cron end
-```
 
-- Boot reapplication is handled by `ipshield-apply.service` (ordered `After=docker.service`), not by an `@reboot` cron line. The historical `@reboot sleep 60 && ...` line has been removed because the systemd ordering closes the boot exposure window from ~70 s to <2 s and removes the arbitrary `sleep`.
-- `MAILTO=...` is added inside the ipshield cron block if an email address is provided. If an existing root crontab `MAILTO` differs, it is restored after the ipshield block so unrelated jobs keep their recipient.
+- `OnBootSec=2min` fires a refresh shortly after each boot. The boot-time *fast attach* (without re-downloading) is still handled by `ipshield-apply.service` (ordered `After=docker.service`); the timer adds the network refresh on top.
+- `OnCalendar=*-*-* 00,08,16:00:00` fires three times a day.
+- `RandomizedDelaySec=5min` jitters every firing by up to 5 minutes.
+- `Persistent=true` catches up a missed calendar run when the machine was off.
+- Logs (stdout/stderr of `update-blocklist.sh`) go to journald: `journalctl -u ipshield.service` (add `-f` to follow, `-S "1 hour ago"` to scope by time).
+- Status: `systemctl list-timers ipshield.timer` shows the next firing and the last activation.
 
 #### Manual configuration (alternative)
 
-If you prefer to manage the crontab manually:
+If you prefer to install the units manually (same content as `configure_timer`):
 
 ```bash
-crontab -e
-```
+cat > /etc/systemd/system/ipshield.service <<'EOF'
+[Unit]
+Description=ipshield blocklist refresh
+After=network-online.target
+Wants=network-online.target
 
-```
-MAILTO=admin@example.com
-0 */12 * * * /path/to/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+[Service]
+Type=oneshot
+ExecStart=/path/to/update-blocklist.sh
+EOF
+
+cat > /etc/systemd/system/ipshield.timer <<'EOF'
+[Unit]
+Description=ipshield blocklist refresh schedule
+
+[Timer]
+OnBootSec=2min
+OnCalendar=*-*-* 00,08,16:00:00
+RandomizedDelaySec=5min
+Persistent=true
+Unit=ipshield.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now ipshield.timer
 ```
 
 In a manual setup, also enable `ipshield-apply.service` to keep the fast boot reattach: `setup-firewall.sh` installs it under `/etc/systemd/system/ipshield-apply.service` and runs `systemctl enable ipshield-apply.service`.
@@ -600,7 +628,7 @@ Le script :
 5. Installe et active le nouveau firewall
 6. Vérifie que le firewall répond après activation (sinon rollback)
 7. **Installe `/etc/update-blocklist.conf`** depuis `update-blocklist.conf.example` si absent (chmod 600, owner root). Ne touche pas au fichier existant pour préserver les modifications.
-8. **Propose de configurer le crontab ipshield** : chemin du script, fichier de log, MAILTO optionnel. Seule une ligne `0 */12` est générée ; la réapplication au boot est confiée à `ipshield-apply.service` (étape suivante), qui ferme la fenêtre d'exposition d'environ 70 s. Idempotent (relance possible pour modifier).
+8. **Installe `ipshield.timer` + `ipshield.service`** : le timer se déclenche `OnBootSec=2min` et `OnCalendar=*-*-* 00,08,16:00:00` avec `RandomizedDelaySec=5min` et `Persistent=true` (rattrape un run manqué si la machine était éteinte). Le service est une unit `Type=oneshot` qui exécute simplement `update-blocklist.sh`. Les logs vont dans journald (`journalctl -u ipshield.service`). Idempotent (relance possible pour mettre à jour).
 9. **Propose d'installer `ipshield-apply.service`** : un unit systemd ordonné `After=ipshield-restore.service nftables.service docker.service` qui exécute `update-blocklist.sh --apply-only` au boot. Attache les règles firewall à l'ipset restauré quelques secondes après le démarrage de Docker, sans retélécharger la blocklist. Si l'ipset est absent ou vide (sauvegarde corrompue, `PERSIST_IPSET=0`), bascule sur un update complet pour ne jamais laisser l'hôte sans protection.
 10. **Propose d'installer le filtre rsyslog + logrotate** : `30-blocked-ips.conf` pour rediriger les `BLOCKED:` vers `/var/log/blocked-ips.log`, et deux configs logrotate (rotate 4 weekly). Idempotent (compare le contenu, ne ré-écrit que si différent ou absent). Si rsyslog est absent du système (Debian minimal par exemple), un sous-prompt propose de l'installer ou de garder journald (logs consultables via `journalctl -k --grep 'BLOCKED:'`).
 
@@ -702,7 +730,7 @@ Le nom de l'ipset whitelist est `WHITELIST_SET_NAME` (`${SET_NAME}-allow` par d�
 1. **`ipshield-restore.service`** (très tôt) : restaure `/var/lib/ipshield/ipset.save` avant le démarrage de `ufw.service`, `firewalld.service` et `nftables.service`. Fournit les données de l'ipset.
 2. **`ipshield-apply.service`** (après Docker) : exécute `update-blocklist.sh --apply-only`, ordonné `After=ipshield-restore.service nftables.service docker.service`. Saute le cycle download/parse/swap d'environ 30 s et attache uniquement les règles LOG/DROP (et DOCKER-USER, quand Docker est présent) à l'ipset restauré par l'étape 1. Bascule sur un update complet si le fichier de sauvegarde ipset est absent ou vide (`PERSIST_IPSET=0`, fichier corrompu, premier boot après une install fraîche) pour ne jamais laisser l'hôte sans protection.
 
-`update-blocklist.sh` sauvegarde les sets ipshield après chaque run réussi quand `PERSIST_IPSET=1` (défaut), alimentant les deux unit ci-dessus. L'ancienne ligne `cron @reboot sleep 60 && update-blocklist.sh` a été supprimée : l'ordering systemd remplace le `sleep` arbitraire, et les installations existantes migrent automatiquement à la prochaine relance de `setup-firewall.sh`.
+`update-blocklist.sh` sauvegarde les sets ipshield après chaque run réussi quand `PERSIST_IPSET=1` (défaut), alimentant les deux unit ci-dessus. Le rafraîchissement récurrent de la blocklist est désormais piloté par `ipshield.timer` (voir « Planification » plus bas) ; le déclenchement `OnBootSec=2min` remplace l'ancienne ligne `@reboot sleep 60 && ...`, l'ordering systemd supprimant le besoin de `sleep` arbitraire.
 
 Configuration :
 
@@ -738,15 +766,13 @@ iptables -S INPUT | grep blacklist-allow
 ./uninstall.sh --apply
 ```
 
-En mode `--apply`, après suppression des règles et ipsets, des prompts séparés proposent de retirer :
-1. `ipshield-restore.service` ;
-2. `ipshield-apply.service` ;
-3. les lignes cron ipshield du crontab de root (le reste est préservé) ;
-4. `/etc/update-blocklist.conf` et le fichier de persistance ipset, généralement `/var/lib/ipshield/ipset.save` ;
-5. les configs `/etc/rsyslog.d/30-blocked-ips.conf` et `/etc/logrotate.d/{update-blocklist,blocked-ips}` (rsyslog est redémarré si le filtre est retiré) ;
-6. les fichiers de logs ipshield correspondant à `/var/log/update-blocklist.log*` et `/var/log/blocked-ips.log*`, y compris les fichiers rotatés/compressés.
+En mode `--apply`, après suppression des règles et ipsets, les composants project-owned sont retirés automatiquement (sans prompt) : `ipshield-restore.service`, `ipshield-apply.service`, `ipshield.timer` + `ipshield.service`, `ipshield-safe-ports.service`, le drop-in `nftables.service` (et la restauration de `/etc/nftables.conf` depuis `.ipshield.bak`), ainsi que `/etc/rsyslog.d/30-blocked-ips.conf` + `/etc/logrotate.d/{update-blocklist,blocked-ips}` (rsyslog est redémarré si le filtre est retiré).
 
-Les entrées dans `/etc/crontab` ou `/etc/cron.d/*` sont seulement listées (à retirer manuellement). Les entrées journald/kernel ne sont pas purgées ; le vacuum du journal est une opération système globale.
+Deux prompts proposent ensuite de retirer les données éditables par l'utilisateur :
+1. `/etc/update-blocklist.conf`, le fichier de persistance ipset (généralement `/var/lib/ipshield/ipset.save`) et le répertoire de cache LKG par source (généralement `/var/lib/ipshield/sources/`) ;
+2. les fichiers de logs ipshield correspondant à `/var/log/update-blocklist.log*` et `/var/log/blocked-ips.log*`, y compris les fichiers rotatés/compressés.
+
+Les entrées journald ne sont pas purgées ; le vacuum du journal est une opération système globale.
 
 ### Support Docker
 
@@ -764,8 +790,8 @@ Les règles blocklist sont aussi limitées à `conntrack --ctstate NEW`. Pour TC
 
 **Notes :**
 
-- Docker recrée `DOCKER-USER` à chaque restart du daemon — les règles ne persistent pas. `ipshield-apply.service` (au boot) et le cron `0 */12` les réappliquent automatiquement, et l'idempotence évite les doublons.
-- Si le script s'exécute au boot avant Docker, `DOCKER-USER` n'existe pas encore — la détection est correctement négative. Le prochain cron rattrapera.
+- Docker recrée `DOCKER-USER` à chaque restart du daemon — les règles ne persistent pas. `ipshield-apply.service` (au boot) et `ipshield.timer` (`OnBootSec=2min` + toutes les 8 h) les réappliquent automatiquement, et l'idempotence évite les doublons.
+- Si le script s'exécute au boot avant Docker, `DOCKER-USER` n'existe pas encore — la détection est correctement négative. Le prochain run du timer rattrapera.
 - `setup-firewall.sh` gère les transitions firewall avec Docker de manière interactive : lorsque des chaînes Docker sont présentes, il peut arrêter Docker, nettoyer les chaînes Docker, poursuivre le setup, puis redémarrer Docker. Si Docker signale une chaîne `DOCKER` manquante après un changement manuel de firewall, redémarrer Docker pour qu'il recrée ses chaînes NAT/filter.
 - Aucune configuration nécessaire si l'auto-détection WAN fonctionne : la détection et l'application sont entièrement automatiques.
 
@@ -777,34 +803,64 @@ iptables -L DOCKER-USER -n -v
 
 Les règles LOG + DROP avec `ctstate NEW`, `match-set blacklist src` et `in ens160` (ou l'interface WAN détectée) doivent apparaître.
 
-### Automatisation (cron)
+### Planification (timer systemd)
 
-`setup-firewall.sh` propose la configuration du crontab à la fin de son exécution (étape 8). C'est la méthode recommandée — elle est idempotente, retire les anciennes lignes/blocs cron ipshield (y compris une éventuelle ligne `@reboot sleep N && ...` héritée d'anciennes versions) et préserve le reste du crontab.
+`setup-firewall.sh` installe `ipshield.timer` + `ipshield.service` à la fin de son exécution (étape 8). C'est la méthode recommandée — idempotente, sans prompt, et `systemctl enable --now ipshield.timer` est exécuté automatiquement.
 
-Pour reconfigurer le crontab plus tard sans toucher aux règles firewall : relancer `./setup-firewall.sh`, choisir le firewall déjà actif, puis répondre `no` au prompt de revue des ports.
+Pour reconfigurer plus tard sans toucher aux règles firewall : relancer `./setup-firewall.sh`, choisir le firewall déjà actif, puis répondre `no` au prompt de revue des ports.
 
-Le script applique le schedule par défaut suivant :
+Le schedule par défaut :
 
+```ini
+# /etc/systemd/system/ipshield.timer
+[Timer]
+OnBootSec=2min
+OnCalendar=*-*-* 00,08,16:00:00
+RandomizedDelaySec=5min
+Persistent=true
+Unit=ipshield.service
 ```
-# ipshield cron begin
-0 */12 * * * /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
-# ipshield cron end
-```
 
-- La réapplication au boot est confiée à `ipshield-apply.service` (ordonné `After=docker.service`), pas à une ligne `@reboot`. L'ancienne ligne `@reboot sleep 60 && ...` a été supprimée car l'ordering systemd ramène la fenêtre d'exposition d'environ 70 s à moins de 2 s et supprime le `sleep` arbitraire.
-- `MAILTO=...` est ajouté dans le bloc cron ipshield si une adresse email est fournie. Si un `MAILTO` root existant diffère, il est restauré après le bloc ipshield afin de préserver les autres jobs.
+- `OnBootSec=2min` déclenche un refresh peu après chaque boot. Le *fast attach* au boot (sans retéléchargement) reste assuré par `ipshield-apply.service` (ordonné `After=docker.service`) ; le timer ajoute le refresh réseau par-dessus.
+- `OnCalendar=*-*-* 00,08,16:00:00` déclenche trois fois par jour.
+- `RandomizedDelaySec=5min` ajoute un jitter de jusqu'à 5 minutes à chaque déclenchement.
+- `Persistent=true` rattrape un run calendaire manqué quand la machine était éteinte.
+- Les logs (stdout/stderr d'`update-blocklist.sh`) vont dans journald : `journalctl -u ipshield.service` (ajouter `-f` pour suivre, `-S "1 hour ago"` pour borner dans le temps).
+- État : `systemctl list-timers ipshield.timer` affiche le prochain déclenchement et le dernier passage.
 
 #### Configuration manuelle (alternative)
 
-Si vous préférez gérer le crontab à la main :
+Si vous préférez installer les unit à la main (même contenu que `configure_timer`) :
 
 ```bash
-crontab -e
-```
+cat > /etc/systemd/system/ipshield.service <<'EOF'
+[Unit]
+Description=ipshield blocklist refresh
+After=network-online.target
+Wants=network-online.target
 
-```
-MAILTO=admin@exemple.fr
-0 */12 * * * /chemin/vers/update-blocklist.sh >> /var/log/update-blocklist.log 2>&1
+[Service]
+Type=oneshot
+ExecStart=/chemin/vers/update-blocklist.sh
+EOF
+
+cat > /etc/systemd/system/ipshield.timer <<'EOF'
+[Unit]
+Description=ipshield blocklist refresh schedule
+
+[Timer]
+OnBootSec=2min
+OnCalendar=*-*-* 00,08,16:00:00
+RandomizedDelaySec=5min
+Persistent=true
+Unit=ipshield.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now ipshield.timer
 ```
 
 Dans une configuration manuelle, pensez aussi à activer `ipshield-apply.service` pour préserver le reattach rapide au boot : `setup-firewall.sh` l'installe dans `/etc/systemd/system/ipshield-apply.service` et exécute `systemctl enable ipshield-apply.service`.

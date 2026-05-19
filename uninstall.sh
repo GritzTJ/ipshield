@@ -483,6 +483,22 @@ else
 fi
 
 echo ""
+log "${PREFIX}--- /etc/nftables.conf patch ---"
+nft_conf_preview="/etc/nftables.conf"
+nft_conf_bak_preview="${nft_conf_preview}.ipshield.bak"
+nft_conf_patched=0
+if [ -f "$nft_conf_preview" ] && grep -qE '^[[:space:]]*#[[:space:]]*flush ruleset[[:space:]]+# disabled by ipshield' "$nft_conf_preview"; then
+  nft_conf_patched=1
+fi
+if [ "$nft_conf_patched" -eq 1 ] || [ -f "$nft_conf_bak_preview" ]; then
+  [ "$nft_conf_patched" -eq 1 ] && echo "  $nft_conf_preview (flush ruleset commented out by ipshield)"
+  [ -f "$nft_conf_bak_preview" ] && echo "  $nft_conf_bak_preview"
+  [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to restore the original conf from backup."
+else
+  echo "  (none)"
+fi
+
+echo ""
 log "${PREFIX}--- safe-ports persistence ---"
 safe_ports_service_preview="/etc/systemd/system/ipshield-safe-ports.service"
 safe_ports_artifacts=()
@@ -648,6 +664,31 @@ if [ -f "$nft_dropin_path" ]; then
     log "nftables.service drop-in removed."
   else
     log "nftables.service drop-in kept."
+  fi
+fi
+
+# --- Optional /etc/nftables.conf restore ---
+nft_conf_path="/etc/nftables.conf"
+nft_conf_bak="${nft_conf_path}.ipshield.bak"
+nft_conf_was_patched=0
+if [ -f "$nft_conf_path" ] && grep -qE '^[[:space:]]*#[[:space:]]*flush ruleset[[:space:]]+# disabled by ipshield' "$nft_conf_path"; then
+  nft_conf_was_patched=1
+fi
+if [ "$nft_conf_was_patched" -eq 1 ] || [ -f "$nft_conf_bak" ]; then
+  echo ""
+  log "ipshield patched /etc/nftables.conf at install time:"
+  [ "$nft_conf_was_patched" -eq 1 ] && echo "    $nft_conf_path (flush ruleset commented out)"
+  [ -f "$nft_conf_bak" ] && echo "    $nft_conf_bak (backup of original)"
+  if [ -f "$nft_conf_bak" ]; then
+    if ask_yes_no "Restore $nft_conf_path from backup and remove $nft_conf_bak?" yes; then
+      cp -a "$nft_conf_bak" "$nft_conf_path"
+      rm -f "$nft_conf_bak"
+      log "Restored $nft_conf_path from backup."
+    else
+      log "/etc/nftables.conf kept patched; backup left in place."
+    fi
+  else
+    log "No backup found; leaving $nft_conf_path untouched. Edit it manually if needed."
   fi
 fi
 

@@ -414,10 +414,7 @@ detect_update_script_path() {
 # --- Cron configuration (idempotent interactive prompt) ---
 configure_cron() {
   echo ""
-  if ! ask_yes_no "Configure the ipshield cron now?" yes; then
-    log "Cron not configured. To do it later, re-run ./setup-firewall.sh."
-    return 0
-  fi
+  log "Configuring ipshield cron (12-hour blocklist refresh)..."
 
   # Check that crontab is available
   if ! command -v crontab >/dev/null 2>&1; then
@@ -441,23 +438,15 @@ configure_cron() {
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     script_path="$script_dir/update-blocklist.sh"
   fi
-
-  read -rp "Path to update-blocklist.sh [$script_path]: " ans
-  [ -n "$ans" ] && script_path="$ans"
   if [ ! -x "$script_path" ]; then
     err "$script_path does not exist or is not executable. Cron not configured."
     return 0
   fi
 
   log_path="/var/log/update-blocklist.log"
-  read -rp "Log file [$log_path]: " ans
-  [ -n "$ans" ] && log_path="$ans"
-
-  read -rp "Email for error notifications (empty = no MAILTO): " mailto
-  if [ -n "$mailto" ] && ! [[ "$mailto" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
-    err "Invalid email address. Cron not configured."
-    return 0
-  fi
+  # MAILTO is not configured automatically. To set it, edit the root crontab
+  # (`crontab -e`) and add `MAILTO=you@example.com` inside the ipshield block.
+  mailto=""
 
   # Filter existing ipshield lines (by basename), plus marker blocks. The
   # basename filter also strips any pre-existing `@reboot sleep N && ...`
@@ -466,9 +455,8 @@ configure_cron() {
   # Do not remove global MAILTO lines from the user's crontab: cron variables
   # are positional and may apply to unrelated jobs.
   local filtered_cron new_lines new_cron script_cmd log_cmd
-  local script_basename existing_mailto
+  local script_basename
   script_basename="$(basename "$script_path")"
-  existing_mailto="$(printf '%s\n' "$current_cron" | awk '/^[[:space:]]*MAILTO=/{print; exit}')"
 
   filtered_cron="$(printf '%s\n' "$current_cron" | awk -v base="$script_basename" '
     /^[[:space:]]*# ipshield cron begin$/ { skip=1; next }
@@ -488,10 +476,6 @@ configure_cron() {
   new_lines="# ipshield cron begin"$'\n'
   [ -n "$mailto" ] && new_lines+="MAILTO=$mailto"$'\n'
   new_lines+="0 */12 * * * $script_cmd >> $log_cmd 2>&1"$'\n'
-  if [ -n "$mailto" ] && [ -n "$existing_mailto" ] && [ "$existing_mailto" != "MAILTO=$mailto" ]; then
-    log "Existing crontab MAILTO will be preserved after the ipshield block: $existing_mailto"
-    new_lines+="$existing_mailto"$'\n'
-  fi
   new_lines+="# ipshield cron end"
 
   # Concatenation
@@ -501,23 +485,15 @@ configure_cron() {
     new_cron="$new_lines"
   fi
 
-  echo ""
-  echo "=== Current crontab (root) ==="
-  if [ -z "$current_cron" ]; then echo "(empty)"; else echo "$current_cron"; fi
-  echo ""
-  echo "=== Crontab after change ==="
-  echo "$new_cron"
-  echo ""
-
   if [ "$current_cron" = "$new_cron" ]; then
-    log "No change needed."
+    log "Cron already up-to-date."
     return 0
   fi
 
-  if ! ask_yes_no "Apply?" yes; then
-    log "Cron not modified."
-    return 0
-  fi
+  echo ""
+  echo "=== ipshield cron block ==="
+  echo "$new_lines"
+  echo ""
 
   printf '%s\n' "$new_cron" | crontab -
   log "Crontab updated."
@@ -672,14 +648,8 @@ configure_ipset_restore() {
     return 1
   fi
 
-  local default_answer="yes"
-  [ "$FIREWALL" = "iptables" ] && default_answer="no"
-
   echo ""
-  if ! ask_yes_no "Install/update the ipset restore systemd service?" "$default_answer"; then
-    log "ipset restore service not configured."
-    return 0
-  fi
+  log "Configuring ipshield-restore.service (ipset persistence across reboot)..."
 
   if ! command -v ipset >/dev/null 2>&1; then
     err "ipset command not available. Cannot configure restore service."
@@ -736,18 +706,11 @@ configure_apply_service() {
   local script_path
 
   echo ""
+  log "Configuring ipshield-apply.service (closes the boot exposure window)..."
 
   script_path="$(detect_update_script_path)"
-  if [ -z "$script_path" ]; then
-    read -rp "Path to update-blocklist.sh for ipshield-apply.service: " script_path
-    if [ -z "$script_path" ] || [ ! -x "$script_path" ]; then
-      err "$script_path does not exist or is not executable. ipshield-apply.service not configured."
-      return 0
-    fi
-  fi
-
-  if ! ask_yes_no "Install/update the ipshield-apply.service systemd unit (closes the boot exposure window)?" yes; then
-    log "ipshield-apply.service not configured."
+  if [ -z "$script_path" ] || [ ! -x "$script_path" ]; then
+    err "Cannot locate an executable update-blocklist.sh. ipshield-apply.service not configured."
     return 0
   fi
 
@@ -789,11 +752,8 @@ configure_logs() {
   fi
 
   if [ "$has_rsyslog" -eq 1 ]; then
-    # rsyslog active: single prompt
-    if ! ask_yes_no "Configure the rsyslog filter + logrotate for ipshield logs?" yes; then
-      log "Logs not configured. To do it later, re-run ./setup-firewall.sh."
-      return 0
-    fi
+    # rsyslog active: install filter + logrotate automatically.
+    log "Configuring rsyslog filter + logrotate for ipshield logs..."
   else
     # rsyslog absent: inform then propose install
     log "rsyslog is not active on this system."

@@ -25,11 +25,18 @@ This script:
   - removes ipshield rules (LOG + DROP blocklist, ACCEPT whitelist) on INPUT
     and DOCKER-USER (if Docker is present);
   - destroys ipsets $SET_NAME and $WHITELIST_SET_NAME;
-  - optionally removes the configuration and ipset persistence file;
-  - optionally removes ipshield log files, including rotated/compressed ones;
   - removes ipshield/orphan rules from /etc/ufw/before.rules line by line (ufw);
-  - optionally removes ipshield-restore.service;
-  - reports (without modifying) cron lines referencing update-blocklist.sh.
+  - removes ipshield-restore.service, ipshield-apply.service,
+    ipshield-safe-ports.service, the nftables.service drop-in, and the
+    safe-ports configuration files;
+  - restores /etc/nftables.conf from its .ipshield.bak backup when present;
+  - removes ipshield cron lines from root's crontab; reports (without
+    modifying) lines in /etc/crontab and /etc/cron.d/*;
+  - removes the rsyslog filter (30-blocked-ips.conf) and logrotate configs;
+  - optionally removes /etc/update-blocklist.conf and the ipset save file
+    (separate prompt -- user-editable data);
+  - optionally removes /var/log/update-blocklist.log + /var/log/blocked-ips.log
+    and their rotated copies (separate prompt -- historical data).
 
 It does NOT uninstall the firewall or any packages (ipset, iptables, etc.).
 EOF
@@ -413,7 +420,7 @@ done
 if [ "$log_configs_found" -eq 0 ]; then
   echo "  (none)"
 elif [ "$APPLY" -eq 1 ]; then
-  echo "  -> a separate prompt will offer to remove them."
+  echo "  -> will be removed automatically."
 fi
 
 echo ""
@@ -457,7 +464,7 @@ log "${PREFIX}--- systemd restore service ---"
 restore_service="/etc/systemd/system/ipshield-restore.service"
 if [ -f "$restore_service" ]; then
   echo "  $restore_service"
-  [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to disable and remove it."
+  [ "$APPLY" -eq 1 ] && echo "  -> will be removed automatically."
 else
   echo "  (none)"
 fi
@@ -467,7 +474,7 @@ log "${PREFIX}--- systemd apply service ---"
 apply_service_preview="/etc/systemd/system/ipshield-apply.service"
 if [ -f "$apply_service_preview" ]; then
   echo "  $apply_service_preview"
-  [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to disable and remove it."
+  [ "$APPLY" -eq 1 ] && echo "  -> will be removed automatically."
 else
   echo "  (none)"
 fi
@@ -477,7 +484,7 @@ log "${PREFIX}--- nftables.service drop-in ---"
 nft_dropin_preview="/etc/systemd/system/nftables.service.d/ipshield.conf"
 if [ -f "$nft_dropin_preview" ]; then
   echo "  $nft_dropin_preview"
-  [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to remove it (restores default ExecStop)."
+  [ "$APPLY" -eq 1 ] && echo "  -> will be removed automatically (restores default ExecStop)."
 else
   echo "  (none)"
 fi
@@ -493,7 +500,7 @@ fi
 if [ "$nft_conf_patched" -eq 1 ] || [ -f "$nft_conf_bak_preview" ]; then
   [ "$nft_conf_patched" -eq 1 ] && echo "  $nft_conf_preview (flush ruleset commented out by ipshield)"
   [ -f "$nft_conf_bak_preview" ] && echo "  $nft_conf_bak_preview"
-  [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to restore the original conf from backup."
+  [ "$APPLY" -eq 1 ] && echo "  -> the original conf will be restored from the .ipshield.bak backup."
 else
   echo "  (none)"
 fi
@@ -509,7 +516,7 @@ if [ "${#safe_ports_artifacts[@]}" -gt 0 ]; then
   for f in "${safe_ports_artifacts[@]}"; do
     echo "  $f"
   done
-  [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to disable and remove them."
+  [ "$APPLY" -eq 1 ] && echo "  -> will be removed automatically."
 else
   echo "  (none)"
 fi
@@ -524,7 +531,7 @@ if [ -n "$cron_files" ]; then
     grep -nE "update-blocklist\.sh" "$f" | awk '{print "      " $0}'
   done
   if [ "$APPLY" -eq 1 ]; then
-    echo "  -> root's crontab will be offered for removal (separate prompt)."
+    echo "  -> ipshield lines will be removed from root's crontab automatically."
     echo "  -> /etc/crontab and /etc/cron.d/* are never modified (do this manually)."
   fi
 else
@@ -617,57 +624,42 @@ for set in "$SET_NAME" "$WHITELIST_SET_NAME"; do
   fi
 done
 
-# --- Optional ipset restore service removal ---
+# --- ipset restore service removal (auto) ---
 if [ -f "$restore_service" ]; then
   echo ""
-  log "ipshield systemd restore service found:"
-  echo "    $restore_service"
-  if ask_yes_no "Disable and remove it?" yes; then
-    systemctl disable --now ipshield-restore.service 2>/dev/null || true
-    rm -f "$restore_service"
-    systemctl daemon-reload 2>/dev/null || true
-    log "ipshield-restore.service removed."
-  else
-    log "ipshield-restore.service kept."
-  fi
+  log "Removing ipshield-restore.service..."
+  systemctl disable --now ipshield-restore.service 2>/dev/null || true
+  rm -f "$restore_service"
+  systemctl daemon-reload 2>/dev/null || true
+  log "ipshield-restore.service removed."
 fi
 
-# --- Optional apply service removal ---
+# --- Apply service removal (auto) ---
 apply_service="/etc/systemd/system/ipshield-apply.service"
 if [ -f "$apply_service" ]; then
   echo ""
-  log "ipshield systemd apply service found:"
-  echo "    $apply_service"
-  if ask_yes_no "Disable and remove it?" yes; then
-    systemctl disable --now ipshield-apply.service 2>/dev/null || true
-    rm -f "$apply_service"
-    systemctl daemon-reload 2>/dev/null || true
-    log "ipshield-apply.service removed."
-  else
-    log "ipshield-apply.service kept."
-  fi
+  log "Removing ipshield-apply.service..."
+  systemctl disable --now ipshield-apply.service 2>/dev/null || true
+  rm -f "$apply_service"
+  systemctl daemon-reload 2>/dev/null || true
+  log "ipshield-apply.service removed."
 fi
 
-# --- Optional nftables persistence drop-in removal ---
+# --- nftables persistence drop-in removal (auto) ---
 nft_dropin_path="/etc/systemd/system/nftables.service.d/ipshield.conf"
 nft_dropin_dir="$(dirname "$nft_dropin_path")"
 if [ -f "$nft_dropin_path" ]; then
   echo ""
-  log "ipshield nftables.service drop-in found:"
-  echo "    $nft_dropin_path"
-  log "Note: removing this restores the default ExecStop=nft flush ruleset,"
+  log "Removing nftables.service drop-in..."
+  log "Note: this restores the default ExecStop=nft flush ruleset,"
   log "which will wipe iptables-nft tables on the next systemctl restart."
-  if ask_yes_no "Remove the drop-in?" yes; then
-    rm -f "$nft_dropin_path"
-    rmdir "$nft_dropin_dir" 2>/dev/null || true
-    systemctl daemon-reload 2>/dev/null || true
-    log "nftables.service drop-in removed."
-  else
-    log "nftables.service drop-in kept."
-  fi
+  rm -f "$nft_dropin_path"
+  rmdir "$nft_dropin_dir" 2>/dev/null || true
+  systemctl daemon-reload 2>/dev/null || true
+  log "nftables.service drop-in removed."
 fi
 
-# --- Optional /etc/nftables.conf restore ---
+# --- /etc/nftables.conf restore (auto) ---
 nft_conf_path="/etc/nftables.conf"
 nft_conf_bak="${nft_conf_path}.ipshield.bak"
 nft_conf_was_patched=0
@@ -676,75 +668,55 @@ if [ -f "$nft_conf_path" ] && grep -qE '^[[:space:]]*#[[:space:]]*flush ruleset[
 fi
 if [ "$nft_conf_was_patched" -eq 1 ] || [ -f "$nft_conf_bak" ]; then
   echo ""
-  log "ipshield patched /etc/nftables.conf at install time:"
-  [ "$nft_conf_was_patched" -eq 1 ] && echo "    $nft_conf_path (flush ruleset commented out)"
-  [ -f "$nft_conf_bak" ] && echo "    $nft_conf_bak (backup of original)"
   if [ -f "$nft_conf_bak" ]; then
-    if ask_yes_no "Restore $nft_conf_path from backup and remove $nft_conf_bak?" yes; then
-      cp -a "$nft_conf_bak" "$nft_conf_path"
-      rm -f "$nft_conf_bak"
-      log "Restored $nft_conf_path from backup."
-    else
-      log "/etc/nftables.conf kept patched; backup left in place."
-    fi
+    cp -a "$nft_conf_bak" "$nft_conf_path"
+    rm -f "$nft_conf_bak"
+    log "Restored $nft_conf_path from backup."
   else
-    log "No backup found; leaving $nft_conf_path untouched. Edit it manually if needed."
+    log "No $nft_conf_bak backup found; leaving $nft_conf_path untouched. Edit it manually if needed."
   fi
 fi
 
-# --- Optional safe-ports service + config removal ---
+# --- safe-ports service + config removal (auto) ---
 safe_ports_service="/etc/systemd/system/ipshield-safe-ports.service"
 safe_ports_files=()
 [ -f /etc/ipshield/safe-ports.nft ] && safe_ports_files+=("/etc/ipshield/safe-ports.nft")
 [ -f /etc/ipshield/safe-ports.v4 ] && safe_ports_files+=("/etc/ipshield/safe-ports.v4")
 if [ -f "$safe_ports_service" ] || [ "${#safe_ports_files[@]}" -gt 0 ]; then
   echo ""
-  log "ipshield safe-ports persistence found:"
-  [ -f "$safe_ports_service" ] && echo "    $safe_ports_service"
-  for f in "${safe_ports_files[@]}"; do
-    echo "    $f"
-  done
-  log "Note: removing these does NOT close already-open ports in the running"
-  log "firewall; it only stops them from being reapplied at the next boot."
-  if ask_yes_no "Disable and remove the safe-ports persistence?" yes; then
-    if [ -f "$safe_ports_service" ]; then
-      systemctl disable --now ipshield-safe-ports.service 2>/dev/null || true
-      rm -f "$safe_ports_service"
-      systemctl daemon-reload 2>/dev/null || true
-    fi
-    for f in "${safe_ports_files[@]}"; do
-      rm -f "$f"
-    done
-    rmdir /etc/ipshield 2>/dev/null || true
-    log "Safe-ports persistence removed."
-  else
-    log "Safe-ports persistence kept."
+  log "Removing safe-ports persistence..."
+  log "Note: this does NOT close already-open ports in the running firewall;"
+  log "it only stops them from being reapplied at the next boot."
+  if [ -f "$safe_ports_service" ]; then
+    systemctl disable --now ipshield-safe-ports.service 2>/dev/null || true
+    rm -f "$safe_ports_service"
+    systemctl daemon-reload 2>/dev/null || true
   fi
+  for f in "${safe_ports_files[@]}"; do
+    rm -f "$f"
+  done
+  rmdir /etc/ipshield 2>/dev/null || true
+  log "Safe-ports persistence removed."
 fi
 
-# --- Optional cron line removal ---
+# --- Cron line removal from root's crontab (auto) ---
 if command -v crontab >/dev/null 2>&1; then
   current_cron="$(crontab -l 2>/dev/null || true)"
   ipshield_lines="$(printf '%s\n' "$current_cron" | grep -E "update-blocklist\.sh|^[[:space:]]*# ipshield cron (begin|end)$" || true)"
   if [ -n "$ipshield_lines" ]; then
     echo ""
-    log "ipshield cron lines found in root's crontab:"
-    echo "$ipshield_lines" | awk '{print "    " $0}'
-    if ask_yes_no "Remove them?" yes; then
-      # Strip both the executable lines and the marker comments installed by
-      # setup-firewall.sh (# ipshield cron begin / end). Orphan markers were
-      # left behind by the previous grep -v pattern.
-      new_cron="$(printf '%s\n' "$current_cron" | grep -vE "update-blocklist\.sh|^[[:space:]]*# ipshield cron (begin|end)$" || true)"
-      new_cron="${new_cron%$'\n'}"
-      if [ -z "$new_cron" ]; then
-        crontab -r 2>/dev/null || true
-        log "Root's crontab cleared."
-      else
-        printf '%s\n' "$new_cron" | crontab -
-        log "Root's crontab updated (ipshield lines removed)."
-      fi
+    log "Removing ipshield cron lines from root's crontab..."
+    # Strip both the executable lines and the marker comments installed by
+    # setup-firewall.sh (# ipshield cron begin / end). Orphan markers were
+    # left behind by the previous grep -v pattern.
+    new_cron="$(printf '%s\n' "$current_cron" | grep -vE "update-blocklist\.sh|^[[:space:]]*# ipshield cron (begin|end)$" || true)"
+    new_cron="${new_cron%$'\n'}"
+    if [ -z "$new_cron" ]; then
+      crontab -r 2>/dev/null || true
+      log "Root's crontab cleared."
     else
-      log "Cron lines kept."
+      printf '%s\n' "$new_cron" | crontab -
+      log "Root's crontab updated (ipshield lines removed)."
     fi
   fi
 fi
@@ -787,7 +759,7 @@ if [ "${#data_files[@]}" -gt 0 ]; then
   fi
 fi
 
-# --- Optional rsyslog + logrotate config removal ---
+# --- rsyslog + logrotate config removal (auto) ---
 log_configs=(/etc/rsyslog.d/30-blocked-ips.conf /etc/logrotate.d/update-blocklist /etc/logrotate.d/blocked-ips)
 present_log_configs=()
 for f in "${log_configs[@]}"; do
@@ -795,31 +767,24 @@ for f in "${log_configs[@]}"; do
 done
 if [ "${#present_log_configs[@]}" -gt 0 ]; then
   echo ""
-  log "ipshield rsyslog + logrotate configs found:"
+  log "Removing rsyslog filter + logrotate configs..."
+  restart_rsyslog=0
   for f in "${present_log_configs[@]}"; do
-    echo "    $f"
-  done
-  if ask_yes_no "Remove them?" yes; then
-    restart_rsyslog=0
-    for f in "${present_log_configs[@]}"; do
-      if rm -f "$f" 2>/dev/null; then
-        log "  $f removed."
-        [[ "$f" == /etc/rsyslog.d/* ]] && restart_rsyslog=1
-      else
-        err "  Cannot remove $f."
-      fi
-    done
-    if [ "$restart_rsyslog" -eq 1 ]; then
-      if systemctl restart rsyslog 2>/dev/null; then
-        log "rsyslog restarted."
-      else
-        err "Cannot restart rsyslog."
-      fi
+    if rm -f "$f" 2>/dev/null; then
+      log "  $f removed."
+      [[ "$f" == /etc/rsyslog.d/* ]] && restart_rsyslog=1
+    else
+      err "  Cannot remove $f."
     fi
-    log "Note: log files /var/log/update-blocklist.log and /var/log/blocked-ips.log are kept."
-  else
-    log "Configs kept."
+  done
+  if [ "$restart_rsyslog" -eq 1 ]; then
+    if systemctl restart rsyslog 2>/dev/null; then
+      log "rsyslog restarted."
+    else
+      err "Cannot restart rsyslog."
+    fi
   fi
+  log "Note: log files /var/log/update-blocklist.log and /var/log/blocked-ips.log are kept."
 fi
 
 # --- Optional log file removal ---

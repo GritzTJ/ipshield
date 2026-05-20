@@ -186,7 +186,7 @@ need_cmd() { command -v "$1" >/dev/null 2>&1 || { err "Error: missing command: $
 need_cmd curl
 need_cmd awk
 if [ "$LOOKUP_CACHE_TTL" -gt 0 ]; then
-  need_cmd cksum
+  need_cmd sha256sum
 fi
 
 # --- Source name from URL ---
@@ -226,6 +226,27 @@ if [ "$LOOKUP_CACHE_TTL" -gt 0 ]; then
     LOOKUP_CACHE_DIR="${XDG_CACHE_HOME:-${HOME:-/tmp/.cache}}/ipshield/lookup"
   fi
   mkdir -p "$LOOKUP_CACHE_DIR" 2>/dev/null || LOOKUP_CACHE_DIR=""
+fi
+
+# Prune orphan cache files left behind when a URL is removed/edited in the
+# config (same scheme as update-blocklist.sh). Files whose basename does not
+# match any current URL hash are deleted. This also cleans up the legacy
+# 'source-<idx>-<cksum>.txt' naming inherited from earlier versions.
+if [ -n "$LOOKUP_CACHE_DIR" ] && [ -d "$LOOKUP_CACHE_DIR" ]; then
+  declare -A LOOKUP_ACTIVE_HASHES=()
+  for url in "${URLS[@]}"; do
+    h="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
+    LOOKUP_ACTIVE_HASHES[$h]=1
+  done
+  shopt -s nullglob
+  for cache_path in "$LOOKUP_CACHE_DIR"/*.txt; do
+    base="$(basename "$cache_path" .txt)"
+    if [ -z "${LOOKUP_ACTIVE_HASHES[$base]:-}" ]; then
+      rm -f "$cache_path"
+      [ "$VERBOSE" -eq 1 ] && log "Removed orphan lookup cache: $cache_path"
+    fi
+  done
+  shopt -u nullglob
 fi
 
 # --- AWK program: extraction + IPv4/CIDR validation (same as update-blocklist.sh) ---
@@ -305,12 +326,11 @@ BEGIN {
 CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize 10485760 --retry 3 --retry-delay 2 --retry-all-errors )
 
 cache_path_for_url() {
-  local idx="$1"
-  local url="$2"
+  local url="$1"
   local sum
   [ -n "$LOOKUP_CACHE_DIR" ] || return 1
-  sum="$(printf '%s' "$url" | cksum | awk '{print $1}')"
-  printf '%s/source-%s-%s.txt' "$LOOKUP_CACHE_DIR" "$idx" "$sum"
+  sum="$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
+  printf '%s/%s.txt' "$LOOKUP_CACHE_DIR" "$sum"
 }
 
 cache_is_fresh() {
@@ -362,7 +382,7 @@ declare -a DL_PIDS=()
 declare -a DL_FROM_CACHE=()
 for i in "${!URLS[@]}"; do
   cache_file=""
-  if cache_file="$(cache_path_for_url "$i" "${URLS[$i]}")" && cache_is_fresh "$cache_file"; then
+  if cache_file="$(cache_path_for_url "${URLS[$i]}")" && cache_is_fresh "$cache_file"; then
     cp "$cache_file" "${TMP_DIR}/dl.${i}"
     DL_FROM_CACHE[i]=1
     DL_PIDS[i]=""

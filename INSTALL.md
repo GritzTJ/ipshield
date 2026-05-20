@@ -174,6 +174,14 @@ When an IP appears in the logs (`BLOCKED:`), identify its source:
 
 The script downloads the lists on the fly and reports which source(s) reference the IP. Downloads are cached for `LOOKUP_CACHE_TTL` seconds (default: 6 hours, set `LOOKUP_CACHE_TTL=0` to disable). Works without root (the ipset check is skipped).
 
+Cache mechanics:
+
+- **Location**: `/var/cache/ipshield/lookup/` when run as root, `${XDG_CACHE_HOME:-$HOME/.cache}/ipshield/lookup/` otherwise. Each user keeps its own cache; the root cache is the one cleaned by `uninstall.sh --apply`.
+- **Naming**: one file per URL, named `<sha256(URL)>.txt`. The hash is content-addressed, so reordering `URLS` in the config is free — only adding/editing/removing a URL changes a file name.
+- **Orphan pruning**: at every run, files whose basename does not match any current URL hash are deleted. This also sweeps the legacy `source-<idx>-<cksum>.txt` files from versions prior to v1.1.0. Deletions are logged in `-v` mode only.
+- **Freshness check**: a cached file is reused when it is non-empty and `now - mtime < LOOKUP_CACHE_TTL`. Otherwise the source is re-downloaded and the cache replaced atomically (`mv` after `cp` to a `.tmp`).
+- **Manual reset**: `rm -rf /var/cache/ipshield/lookup/` (root) or `rm -rf ~/.cache/ipshield/lookup/` (user). The next run rebuilds what it needs. There is no `--no-cache` CLI flag; `LOOKUP_CACHE_TTL=0 ./lookup-ip.sh ...` forces a one-shot bypass.
+
 ### Whitelist
 
 To allow specific IPs/subnets to bypass the blocklist (typically your management IPs/subnets), set the `WHITELIST` variable in `/etc/update-blocklist.conf`:
@@ -694,6 +702,14 @@ Si une IP apparaît dans les logs (`BLOCKED:`), identifier sa source :
 ```
 
 Le script télécharge les listes à la volée et indique dans quelle(s) source(s) l'IP apparaît. Les téléchargements sont mis en cache pendant `LOOKUP_CACHE_TTL` secondes (défaut : 6 heures, `LOOKUP_CACHE_TTL=0` pour désactiver). Fonctionne sans root (la vérification ipset est ignorée).
+
+Fonctionnement du cache :
+
+- **Emplacement** : `/var/cache/ipshield/lookup/` en root, `${XDG_CACHE_HOME:-$HOME/.cache}/ipshield/lookup/` sinon. Chaque utilisateur a son propre cache ; seul le cache root est nettoyé par `uninstall.sh --apply`.
+- **Nommage** : un fichier par URL, nommé `<sha256(URL)>.txt`. Le hash est dérivé du contenu de l'URL, donc réordonner `URLS` dans la conf est gratuit — seuls add/edit/remove changent un nom de fichier.
+- **Purge orphelins** : à chaque run, les fichiers dont le basename ne correspond à aucun hash d'URL active sont supprimés. Ceci nettoie aussi les fichiers `source-<idx>-<cksum>.txt` issus des versions antérieures à v1.1.0. Les suppressions sont loguées uniquement en mode `-v`.
+- **Test de fraîcheur** : un fichier cache est réutilisé s'il est non vide et `now - mtime < LOOKUP_CACHE_TTL`. Sinon la source est retéléchargée et le cache remplacé atomiquement (`mv` après `cp` vers un `.tmp`).
+- **Reset manuel** : `rm -rf /var/cache/ipshield/lookup/` (root) ou `rm -rf ~/.cache/ipshield/lookup/` (utilisateur). Le run suivant reconstruit ce dont il a besoin. Pas de flag `--no-cache` ; pour un bypass ponctuel : `LOOKUP_CACHE_TTL=0 ./lookup-ip.sh ...`.
 
 ### Whitelist
 

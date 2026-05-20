@@ -103,6 +103,11 @@ fi
 : "${PERSIST_IPSET:=1}"
 : "${IPSET_SAVE_FILE:=/var/lib/ipshield/ipset.save}"
 : "${SOURCE_CACHE_DIR:=/var/lib/ipshield/sources}"
+# lookup-ip.sh writes its blocklist mirror cache to /var/cache/ipshield/lookup
+# when run as root (the non-root path under $XDG_CACHE_HOME is per-user and
+# cannot be cleaned by this script). The path is hardcoded in lookup-ip.sh, so
+# match it verbatim here rather than expose a knob no one will tune.
+LOOKUP_CACHE_DIR="/var/cache/ipshield/lookup"
 
 # --- Lock shared with update-blocklist.sh (anti-race against ipshield.timer) ---
 # Without this lock, a scheduled update-blocklist.sh run could re-create the rules
@@ -456,13 +461,24 @@ if [ -n "${SOURCE_CACHE_DIR:-}" ] && [ -d "$SOURCE_CACHE_DIR" ]; then
     source_cache_present=1
   fi
 fi
-if [ "${#data_files[@]}" -gt 0 ] || [ "$source_cache_present" -eq 1 ]; then
+# lookup-ip.sh blocklist mirror cache (root path only).
+lookup_cache_present=0
+if [ -d "$LOOKUP_CACHE_DIR" ]; then
+  if [ -n "$(ls -A "$LOOKUP_CACHE_DIR" 2>/dev/null || true)" ]; then
+    lookup_cache_present=1
+  fi
+fi
+if [ "${#data_files[@]}" -gt 0 ] || [ "$source_cache_present" -eq 1 ] || [ "$lookup_cache_present" -eq 1 ]; then
   for f in "${data_files[@]}"; do
     echo "  $f"
   done
   if [ "$source_cache_present" -eq 1 ]; then
     cache_count="$(find "$SOURCE_CACHE_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l)"
     echo "  $SOURCE_CACHE_DIR/ ($cache_count cached source file(s))"
+  fi
+  if [ "$lookup_cache_present" -eq 1 ]; then
+    lookup_count="$(find "$LOOKUP_CACHE_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l)"
+    echo "  $LOOKUP_CACHE_DIR/ ($lookup_count lookup-ip cached source file(s))"
   fi
   [ "$APPLY" -eq 1 ] && echo "  -> a separate prompt will offer to remove them."
 else
@@ -721,7 +737,7 @@ if [ -f "$update_timer" ] || [ -f "$update_service" ]; then
 fi
 
 # --- Optional config + persistence file removal ---
-if [ "${#data_files[@]}" -gt 0 ] || [ "$source_cache_present" -eq 1 ]; then
+if [ "${#data_files[@]}" -gt 0 ] || [ "$source_cache_present" -eq 1 ] || [ "$lookup_cache_present" -eq 1 ]; then
   echo ""
   log "ipshield configuration + persistence files found:"
   for f in "${data_files[@]}"; do
@@ -729,6 +745,9 @@ if [ "${#data_files[@]}" -gt 0 ] || [ "$source_cache_present" -eq 1 ]; then
   done
   if [ "$source_cache_present" -eq 1 ]; then
     echo "    $SOURCE_CACHE_DIR/ (per-source last-known-good cache)"
+  fi
+  if [ "$lookup_cache_present" -eq 1 ]; then
+    echo "    $LOOKUP_CACHE_DIR/ (lookup-ip blocklist mirror cache)"
   fi
   if ask_yes_no "Remove them?" yes; then
     for f in "${data_files[@]}"; do
@@ -744,6 +763,15 @@ if [ "${#data_files[@]}" -gt 0 ] || [ "$source_cache_present" -eq 1 ]; then
       find "$SOURCE_CACHE_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
       rmdir "$SOURCE_CACHE_DIR" 2>/dev/null || true
       log "  $SOURCE_CACHE_DIR/ removed."
+    fi
+    if [ "$lookup_cache_present" -eq 1 ]; then
+      # Same scoping as the LKG cache: only top-level files in the
+      # hardcoded lookup cache directory, no recursion.
+      find "$LOOKUP_CACHE_DIR" -maxdepth 1 -type f -delete 2>/dev/null || true
+      rmdir "$LOOKUP_CACHE_DIR" 2>/dev/null || true
+      log "  $LOOKUP_CACHE_DIR/ removed."
+      # Also drop the /var/cache/ipshield/ parent if empty.
+      rmdir /var/cache/ipshield 2>/dev/null || true
     fi
     # Drop the persistence parent directory only when empty: leftover empty
     # /var/lib/ipshield/ was visible after the runtime uninstall on the VM.

@@ -1430,7 +1430,9 @@ if [ "$FIREWALL" = "$DETECTED" ]; then
   configure_apply_service
   configure_logs
   echo ""
-  log "Now run update-blocklist.sh for the first update; ipshield.timer will take over afterwards."
+  log "ipshield.timer is now active. The first update may already be running (Persistent=true catches up missed daily slots)."
+  log "Monitor with: journalctl -u ipshield.service -f"
+  log "Scheduled runs: 00:00, 08:00, 16:00 UTC + boot."
   exit 0
 fi
 
@@ -1658,4 +1660,6 @@ configure_apply_service
 configure_logs
 
 echo ""
-log "Now run update-blocklist.sh for the first update; ipshield.timer will take over afterwards."
+log "ipshield.timer is now active. The first update may already be running (Persistent=true catches up missed daily slots)."
+log "Monitor with: journalctl -u ipshield.service -f"
+log "Scheduled runs: 00:00, 08:00, 16:00 UTC + boot."

@@ -258,7 +258,7 @@ iptables -S INPUT | grep blacklist-allow
 In `--apply` mode, after rules and ipsets are removed, the project-owned components are removed automatically (no prompt): `ipshield-restore.service`, `ipshield-apply.service`, `ipshield.timer` + `ipshield.service`, the `ipshield-safe-ports.service`, the `nftables.service` drop-in (and the `/etc/nftables.conf` restore from `.ipshield.bak`), and the `/etc/rsyslog.d/30-blocked-ips.conf` + `/etc/logrotate.d/{update-blocklist,blocked-ips}` configs (rsyslog is restarted if the filter is removed).
 
 Two prompts then offer to remove user-editable data:
-1. `/etc/update-blocklist.conf`, the ipset persistence file (usually `/var/lib/ipshield/ipset.save`), and the per-source LKG cache directory (usually `/var/lib/ipshield/sources/`);
+1. `/etc/update-blocklist.conf`, the ipset persistence file (usually `/var/lib/ipshield/ipset.save`), the per-source LKG cache directory (usually `/var/lib/ipshield/sources/`), and the `lookup-ip.sh` mirror cache (`/var/cache/ipshield/lookup/`, root path only — per-user caches under `$XDG_CACHE_HOME` are left untouched);
 2. ipshield log files matching `/var/log/update-blocklist.log*` and `/var/log/blocked-ips.log*`, including rotated/compressed files.
 
 Journald entries are not purged; journal vacuuming is a global system operation.
@@ -787,7 +787,7 @@ iptables -S INPUT | grep blacklist-allow
 En mode `--apply`, après suppression des règles et ipsets, les composants project-owned sont retirés automatiquement (sans prompt) : `ipshield-restore.service`, `ipshield-apply.service`, `ipshield.timer` + `ipshield.service`, `ipshield-safe-ports.service`, le drop-in `nftables.service` (et la restauration de `/etc/nftables.conf` depuis `.ipshield.bak`), ainsi que `/etc/rsyslog.d/30-blocked-ips.conf` + `/etc/logrotate.d/{update-blocklist,blocked-ips}` (rsyslog est redémarré si le filtre est retiré).
 
 Deux prompts proposent ensuite de retirer les données éditables par l'utilisateur :
-1. `/etc/update-blocklist.conf`, le fichier de persistance ipset (généralement `/var/lib/ipshield/ipset.save`) et le répertoire de cache LKG par source (généralement `/var/lib/ipshield/sources/`) ;
+1. `/etc/update-blocklist.conf`, le fichier de persistance ipset (généralement `/var/lib/ipshield/ipset.save`), le répertoire de cache LKG par source (généralement `/var/lib/ipshield/sources/`) et le cache miroir de `lookup-ip.sh` (`/var/cache/ipshield/lookup/`, chemin root uniquement — les caches par utilisateur sous `$XDG_CACHE_HOME` ne sont pas touchés) ;
 2. les fichiers de logs ipshield correspondant à `/var/log/update-blocklist.log*` et `/var/log/blocked-ips.log*`, y compris les fichiers rotatés/compressés.
 
 Les entrées journald ne sont pas purgées ; le vacuum du journal est une opération système globale.

@@ -4,7 +4,7 @@
 
 *Automatic malicious IP blocking via ipset & Linux firewall*
 
-**Current release: v1.0.0**
+**Current release: v1.1.0**
 
 **[🇬🇧 English](#english) · [🇫🇷 Français](#français)**
 
@@ -21,7 +21,7 @@
 
 Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 
-`v1.0.0` has been validated on Internet-exposed server scenarios with Ubuntu 24.04 LTS, Debian 12, Debian 13 and Fedora 44.
+`v1.1.0` has been validated on Internet-exposed server scenarios with Ubuntu 24.04 LTS, Debian 12, Debian 13 and Fedora 44. v1.1.0 adds per-source last-known-good caching, the `ipshield.timer`/`ipshield.service` systemd schedule (replacing the cron line) and the `ipshield-apply.service` boot-time fast attach.
 
 ### Features
 
@@ -149,7 +149,7 @@ See **[INSTALL.md](INSTALL.md)** for the complete guide: prerequisites, configur
 
 Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 
-`v1.0.0` a été validée sur des scénarios de serveurs exposés sur Internet avec Ubuntu 24.04 LTS, Debian 12, Debian 13 et Fedora 44.
+`v1.1.0` a été validée sur des scénarios de serveurs exposés sur Internet avec Ubuntu 24.04 LTS, Debian 12, Debian 13 et Fedora 44. v1.1.0 ajoute le cache last-known-good par source, la planification systemd `ipshield.timer`/`ipshield.service` (remplaçant la ligne cron) et le fast attach au boot via `ipshield-apply.service`.
 
 ### Fonctionnalités
 

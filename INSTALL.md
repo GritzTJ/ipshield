@@ -1,6 +1,6 @@
 # Installation guide
 
-Current release: **v1.0.0**
+Current release: **v1.1.0**
 
 **[🇬🇧 English](#english) · [🇫🇷 Français](#français)**
 
@@ -11,7 +11,7 @@ Current release: **v1.0.0**
 
 Installation guide for the automatic IPv4 blocklist updater.
 
-`v1.0.0` has been validated on Ubuntu 24.04 LTS, Debian 12, Debian 13 and Fedora 44 with the recommended firewall paths described below.
+`v1.1.0` has been validated on Ubuntu 24.04 LTS, Debian 12, Debian 13 and Fedora 44 with the recommended firewall paths described below.
 
 ### Prerequisites
 
@@ -108,11 +108,12 @@ The script:
 5. Installs and enables the new firewall
 6. Verifies the firewall responds after activation (otherwise rolls back)
 7. **Installs `/etc/update-blocklist.conf`** from `update-blocklist.conf.example` if missing (chmod 600, owner root). Existing files are preserved to keep user changes intact.
-8. **Installs `ipshield.timer` + `ipshield.service`**: the timer fires `OnBootSec=2min` and `OnCalendar=*-*-* 00,08,16:00:00` with `RandomizedDelaySec=5min` and `Persistent=true` (catches a missed run if the machine was off). The service is a `Type=oneshot` unit that just runs `update-blocklist.sh`. Logs go to journald (`journalctl -u ipshield.service`). Idempotent (rerun to update).
-9. **Offers to install `ipshield-apply.service`**: a systemd unit ordered `After=ipshield-restore.service nftables.service docker.service` that runs `update-blocklist.sh --apply-only` at boot. This attaches the firewall rules to the restored ipset within seconds of Docker being up, without re-downloading the blocklist. If the ipset is missing or empty (e.g. corrupted save file, `PERSIST_IPSET=0`), it falls back to a full update so the system is never left unprotected.
-10. **Offers to install the rsyslog filter + logrotate**: `30-blocked-ips.conf` to redirect `BLOCKED:` to `/var/log/blocked-ips.log`, plus two logrotate configs (rotate 4 weekly). Idempotent (compares content, only rewrites if different or absent). If rsyslog is missing (e.g. minimal Debian), a sub-prompt offers to install it or stick with journald (logs viewable via `journalctl -k --grep 'BLOCKED:'`).
+8. **Installs `ipshield-restore.service`** when `PERSIST_IPSET=1` (the default): a systemd oneshot ordered `Before=netfilter-persistent.service nftables.service ufw.service firewalld.service` that runs `ipset restore -! -f $IPSET_SAVE_FILE` at boot. Without it, persistent firewalls (`ufw`, `firewalld` on iptables-nft) can fail to start when their rules reference an ipset that does not exist yet. Pre-creates `/var/lib/ipshield/` and the per-source LKG cache directory. Idempotent (compares content; only enables once). Skipped automatically when `PERSIST_IPSET=0`.
+9. **Installs `ipshield.timer` + `ipshield.service`**: the timer fires `OnBootSec=2min` and `OnCalendar=*-*-* 00,08,16:00:00` with `RandomizedDelaySec=5min` and `Persistent=true` (catches a missed run if the machine was off). The service is a `Type=oneshot` unit that just runs `update-blocklist.sh`. Logs go to journald (`journalctl -u ipshield.service`). Idempotent (rerun to update).
+10. **Installs `ipshield-apply.service`**: a systemd unit ordered `After=ipshield-restore.service nftables.service docker.service` that runs `update-blocklist.sh --apply-only` at boot. This attaches the firewall rules to the restored ipset within seconds of Docker being up, without re-downloading the blocklist. The `After=docker.service` is opportunistic — there is no `Wants=`/`Requires=` on Docker, so on a Docker-less host the unit fires as soon as `ipshield-restore.service` (and `nftables.service` if present) are done, and `update-blocklist.sh` simply skips the DOCKER-USER chain when it is not detected. If the ipset is missing or empty (e.g. corrupted save file, `PERSIST_IPSET=0`), it falls back to a full update so the system is never left unprotected.
+11. **Installs the rsyslog filter + logrotate** when rsyslog is active: `30-blocked-ips.conf` to redirect `BLOCKED:` to `/var/log/blocked-ips.log`, plus two logrotate configs (rotate 4 weekly). Idempotent (compares content, only rewrites if different or absent). If rsyslog is missing (e.g. minimal Debian), a sub-prompt offers to install it; declining keeps logs in journald (viewable via `journalctl -k --grep 'BLOCKED:'`) with the logrotate config still installable on its own.
 
-> If the chosen firewall is already active (no transition needed), `setup-firewall.sh` can still review/open listening ports on the active firewall, then continues to steps 7-10. The port review prompt defaults to `no`.
+> If the chosen firewall is already active (no transition needed), `setup-firewall.sh` can still review/open listening ports on the active firewall, then continues to steps 7-11. The port review prompt defaults to `no`.
 
 Backend selection details:
 
@@ -208,7 +209,7 @@ The whitelist ipset name is `WHITELIST_SET_NAME` (`${SET_NAME}-allow` by default
 `ipshield` ships two systemd units that, together, close the boot window to under two seconds:
 
 1. **`ipshield-restore.service`** (early): restores `/var/lib/ipshield/ipset.save` before `ufw.service`, `firewalld.service` and `nftables.service` start. Provides the ipset data.
-2. **`ipshield-apply.service`** (after Docker): runs `update-blocklist.sh --apply-only`, ordered `After=ipshield-restore.service nftables.service docker.service`. Skips the ~30s download/parse/swap cycle and just attaches the LOG/DROP rules (and DOCKER-USER rules, when Docker is present) to the ipset that step 1 has loaded. Falls back to a full update if the ipset save file is missing or empty (e.g. `PERSIST_IPSET=0`, corrupted file, first boot after a fresh install) so the host is never left unprotected.
+2. **`ipshield-apply.service`** (after Docker, when present): runs `update-blocklist.sh --apply-only`, ordered `After=ipshield-restore.service nftables.service docker.service`. The `After=` is opportunistic — no `Wants=docker.service` is declared, so on a Docker-less host the unit starts as soon as the other ordering constraints are satisfied and `update-blocklist.sh` simply skips the DOCKER-USER chain. Skips the ~30s download/parse/swap cycle and just attaches the LOG/DROP rules (and DOCKER-USER rules, when Docker is present) to the ipset that step 1 has loaded. Falls back to a full update if the ipset save file is missing or empty (e.g. `PERSIST_IPSET=0`, corrupted file, first boot after a fresh install) so the host is never left unprotected.
 
 `update-blocklist.sh` saves the ipshield sets after each successful run when `PERSIST_IPSET=1` (default), feeding the two units above. The recurring blocklist refresh runs through `ipshield.timer` (see "Scheduling" below); the `OnBootSec=2min` trigger replaces the legacy `@reboot sleep 60 && ...` cron line, with the systemd ordering removing the need for an arbitrary `sleep`.
 
@@ -285,7 +286,7 @@ LOG + DROP rules with `ctstate NEW`, `match-set blacklist src` and `in ens160` (
 
 ### Scheduling (systemd timer)
 
-`setup-firewall.sh` installs `ipshield.timer` + `ipshield.service` at the end of its execution (step 8). This is the recommended method — idempotent, no prompt, and `systemctl enable --now ipshield.timer` is run automatically.
+`setup-firewall.sh` installs `ipshield.timer` + `ipshield.service` at the end of its execution (step 9). This is the recommended method — idempotent, no prompt, and `systemctl enable --now ipshield.timer` is run automatically.
 
 To reconfigure later without touching firewall rules: rerun `./setup-firewall.sh`, pick the already-active firewall, then answer `no` to the port review prompt.
 
@@ -347,7 +348,7 @@ In a manual setup, also enable `ipshield-apply.service` to keep the fast boot re
 
 ### Logs
 
-> **Recommended setup**: `setup-firewall.sh` offers (step 9) to install the rsyslog filter and the two logrotate configs automatically. Idempotent (replaying only rewrites on diff). The sections below are the equivalent manual procedure.
+> **Recommended setup**: `setup-firewall.sh` installs the rsyslog filter and the two logrotate configs automatically when rsyslog is active (step 11), or offers to install rsyslog itself if missing. Idempotent (replaying only rewrites on diff). The sections below are the equivalent manual procedure.
 
 #### Script logrotate
 
@@ -531,7 +532,7 @@ iptables -I DOCKER-USER 2 -i ens160 -m conntrack --ctstate NEW -m set --match-se
 
 Guide d'installation du script de mise à jour automatique d'un ipset de blocage IPv4.
 
-`v1.0.0` a été validée sur Ubuntu 24.04 LTS, Debian 12, Debian 13 et Fedora 44 avec les chemins firewall recommandés ci-dessous.
+`v1.1.0` a été validée sur Ubuntu 24.04 LTS, Debian 12, Debian 13 et Fedora 44 avec les chemins firewall recommandés ci-dessous.
 
 ### Prérequis
 
@@ -628,11 +629,12 @@ Le script :
 5. Installe et active le nouveau firewall
 6. Vérifie que le firewall répond après activation (sinon rollback)
 7. **Installe `/etc/update-blocklist.conf`** depuis `update-blocklist.conf.example` si absent (chmod 600, owner root). Ne touche pas au fichier existant pour préserver les modifications.
-8. **Installe `ipshield.timer` + `ipshield.service`** : le timer se déclenche `OnBootSec=2min` et `OnCalendar=*-*-* 00,08,16:00:00` avec `RandomizedDelaySec=5min` et `Persistent=true` (rattrape un run manqué si la machine était éteinte). Le service est une unit `Type=oneshot` qui exécute simplement `update-blocklist.sh`. Les logs vont dans journald (`journalctl -u ipshield.service`). Idempotent (relance possible pour mettre à jour).
-9. **Propose d'installer `ipshield-apply.service`** : un unit systemd ordonné `After=ipshield-restore.service nftables.service docker.service` qui exécute `update-blocklist.sh --apply-only` au boot. Attache les règles firewall à l'ipset restauré quelques secondes après le démarrage de Docker, sans retélécharger la blocklist. Si l'ipset est absent ou vide (sauvegarde corrompue, `PERSIST_IPSET=0`), bascule sur un update complet pour ne jamais laisser l'hôte sans protection.
-10. **Propose d'installer le filtre rsyslog + logrotate** : `30-blocked-ips.conf` pour rediriger les `BLOCKED:` vers `/var/log/blocked-ips.log`, et deux configs logrotate (rotate 4 weekly). Idempotent (compare le contenu, ne ré-écrit que si différent ou absent). Si rsyslog est absent du système (Debian minimal par exemple), un sous-prompt propose de l'installer ou de garder journald (logs consultables via `journalctl -k --grep 'BLOCKED:'`).
+8. **Installe `ipshield-restore.service`** quand `PERSIST_IPSET=1` (défaut) : un unit systemd oneshot ordonné `Before=netfilter-persistent.service nftables.service ufw.service firewalld.service` qui exécute `ipset restore -! -f $IPSET_SAVE_FILE` au boot. Sans lui, les firewalls persistants (`ufw`, `firewalld` sur iptables-nft) peuvent échouer au démarrage si leurs règles référencent un ipset qui n'existe pas encore. Pré-crée `/var/lib/ipshield/` et le répertoire de cache LKG par source. Idempotent (compare le contenu, active une seule fois). Sauté automatiquement quand `PERSIST_IPSET=0`.
+9. **Installe `ipshield.timer` + `ipshield.service`** : le timer se déclenche `OnBootSec=2min` et `OnCalendar=*-*-* 00,08,16:00:00` avec `RandomizedDelaySec=5min` et `Persistent=true` (rattrape un run manqué si la machine était éteinte). Le service est une unit `Type=oneshot` qui exécute simplement `update-blocklist.sh`. Les logs vont dans journald (`journalctl -u ipshield.service`). Idempotent (relance possible pour mettre à jour).
+10. **Installe `ipshield-apply.service`** : un unit systemd ordonné `After=ipshield-restore.service nftables.service docker.service` qui exécute `update-blocklist.sh --apply-only` au boot. Attache les règles firewall à l'ipset restauré quelques secondes après le démarrage de Docker, sans retélécharger la blocklist. Le `After=docker.service` est opportuniste — aucun `Wants=`/`Requires=` sur Docker, donc sur une machine sans Docker l'unit démarre dès que `ipshield-restore.service` (et `nftables.service` si présent) sont terminés, et `update-blocklist.sh` saute simplement la chaîne DOCKER-USER quand elle n'est pas détectée. Si l'ipset est absent ou vide (sauvegarde corrompue, `PERSIST_IPSET=0`), bascule sur un update complet pour ne jamais laisser l'hôte sans protection.
+11. **Installe le filtre rsyslog + logrotate** quand rsyslog est actif : `30-blocked-ips.conf` pour rediriger les `BLOCKED:` vers `/var/log/blocked-ips.log`, et deux configs logrotate (rotate 4 weekly). Idempotent (compare le contenu, ne ré-écrit que si différent ou absent). Si rsyslog est absent (Debian minimal par exemple), un sous-prompt propose de l'installer ; refuser laisse les logs dans journald (consultables via `journalctl -k --grep 'BLOCKED:'`), la config logrotate restant installable seule.
 
-> Si le firewall choisi est déjà actif (pas de transition), `setup-firewall.sh` peut quand même revoir/ouvrir les ports en écoute sur le firewall actif, puis continue aux étapes 7 à 10. Le prompt de revue des ports propose `no` par défaut.
+> Si le firewall choisi est déjà actif (pas de transition), `setup-firewall.sh` peut quand même revoir/ouvrir les ports en écoute sur le firewall actif, puis continue aux étapes 7 à 11. Le prompt de revue des ports propose `no` par défaut.
 
 Détails de sélection du backend :
 
@@ -728,7 +730,7 @@ Le nom de l'ipset whitelist est `WHITELIST_SET_NAME` (`${SET_NAME}-allow` par d�
 `ipshield` fournit deux unit systemd qui, ensemble, ferment la fenêtre de boot à moins de deux secondes :
 
 1. **`ipshield-restore.service`** (très tôt) : restaure `/var/lib/ipshield/ipset.save` avant le démarrage de `ufw.service`, `firewalld.service` et `nftables.service`. Fournit les données de l'ipset.
-2. **`ipshield-apply.service`** (après Docker) : exécute `update-blocklist.sh --apply-only`, ordonné `After=ipshield-restore.service nftables.service docker.service`. Saute le cycle download/parse/swap d'environ 30 s et attache uniquement les règles LOG/DROP (et DOCKER-USER, quand Docker est présent) à l'ipset restauré par l'étape 1. Bascule sur un update complet si le fichier de sauvegarde ipset est absent ou vide (`PERSIST_IPSET=0`, fichier corrompu, premier boot après une install fraîche) pour ne jamais laisser l'hôte sans protection.
+2. **`ipshield-apply.service`** (après Docker, quand présent) : exécute `update-blocklist.sh --apply-only`, ordonné `After=ipshield-restore.service nftables.service docker.service`. Le `After=` est opportuniste — aucun `Wants=docker.service` n'est déclaré, donc sur une machine sans Docker l'unit démarre dès que les autres contraintes d'ordering sont satisfaites et `update-blocklist.sh` saute simplement la chaîne DOCKER-USER. Saute le cycle download/parse/swap d'environ 30 s et attache uniquement les règles LOG/DROP (et DOCKER-USER, quand Docker est présent) à l'ipset restauré par l'étape 1. Bascule sur un update complet si le fichier de sauvegarde ipset est absent ou vide (`PERSIST_IPSET=0`, fichier corrompu, premier boot après une install fraîche) pour ne jamais laisser l'hôte sans protection.
 
 `update-blocklist.sh` sauvegarde les sets ipshield après chaque run réussi quand `PERSIST_IPSET=1` (défaut), alimentant les deux unit ci-dessus. Le rafraîchissement récurrent de la blocklist est désormais piloté par `ipshield.timer` (voir « Planification » plus bas) ; le déclenchement `OnBootSec=2min` remplace l'ancienne ligne `@reboot sleep 60 && ...`, l'ordering systemd supprimant le besoin de `sleep` arbitraire.
 
@@ -805,7 +807,7 @@ Les règles LOG + DROP avec `ctstate NEW`, `match-set blacklist src` et `in ens1
 
 ### Planification (timer systemd)
 
-`setup-firewall.sh` installe `ipshield.timer` + `ipshield.service` à la fin de son exécution (étape 8). C'est la méthode recommandée — idempotente, sans prompt, et `systemctl enable --now ipshield.timer` est exécuté automatiquement.
+`setup-firewall.sh` installe `ipshield.timer` + `ipshield.service` à la fin de son exécution (étape 9). C'est la méthode recommandée — idempotente, sans prompt, et `systemctl enable --now ipshield.timer` est exécuté automatiquement.
 
 Pour reconfigurer plus tard sans toucher aux règles firewall : relancer `./setup-firewall.sh`, choisir le firewall déjà actif, puis répondre `no` au prompt de revue des ports.
 
@@ -867,7 +869,7 @@ Dans une configuration manuelle, pensez aussi à activer `ipshield-apply.service
 
 ### Logs
 
-> **Installation recommandée** : `setup-firewall.sh` propose à la fin (étape 9) d'installer automatiquement le filtre rsyslog et les deux configs logrotate. Idempotent (rejouer ne ré-écrit que si différent). Les sections ci-dessous sont la procédure manuelle équivalente, pour une configuration manuelle.
+> **Installation recommandée** : `setup-firewall.sh` installe automatiquement le filtre rsyslog et les deux configs logrotate quand rsyslog est actif (étape 11), ou propose d'installer rsyslog s'il est absent. Idempotent (rejouer ne ré-écrit que si différent). Les sections ci-dessous sont la procédure manuelle équivalente, pour une configuration manuelle.
 
 #### Logrotate du script
 

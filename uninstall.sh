@@ -813,7 +813,6 @@ if [ "${#present_log_configs[@]}" -gt 0 ]; then
       err "Cannot restart rsyslog."
     fi
   fi
-  log "Note: log files /var/log/update-blocklist.log and /var/log/blocked-ips.log are kept."
 fi
 
 # --- Optional log file removal ---

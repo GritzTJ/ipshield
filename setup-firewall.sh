@@ -429,7 +429,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=$script_path"
+ExecStart=$script_path
+StandardOutput=append:/var/log/update-blocklist.log
+StandardError=append:/var/log/update-blocklist.log"
 
   local timer_content="[Unit]
 Description=ipshield blocklist refresh schedule
@@ -703,6 +705,8 @@ ConditionPathExists=$conf_path
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=$script_path --apply-only
+StandardOutput=append:/var/log/update-blocklist.log
+StandardError=append:/var/log/update-blocklist.log
 
 [Install]
 WantedBy=multi-user.target"

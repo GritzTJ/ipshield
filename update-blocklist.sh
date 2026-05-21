@@ -983,7 +983,18 @@ need_cmd stat
 
 # --- Lock ---
 mkdir -p "$LOCK_DIR"
-log "--- Update on $(date '+%Y-%m-%d %H:%M:%S %Z') ---"
+# Identify the trigger source so log entries are self-explanatory:
+#   - APPLY_ONLY=1 is only set by ipshield-apply.service (boot fast path).
+#   - INVOCATION_ID is set by systemd for any unit-driven run; combined with
+#     APPLY_ONLY=0 that means ipshield.service (timer/boot-delayed full run).
+#   - Neither: manual invocation from a shell.
+trigger_label="manual"
+if [ "$APPLY_ONLY" -eq 1 ]; then
+  trigger_label="boot fast path (ipshield-apply.service)"
+elif [ -n "${INVOCATION_ID:-}" ]; then
+  trigger_label="systemd timer (ipshield.service)"
+fi
+log "--- Update on $(date '+%Y-%m-%d %H:%M:%S %Z') [trigger: $trigger_label] ---"
 
 exec 9>"$LOCK_FILE"
 flock -n 9 || { err "Error: another instance is already running."; exit 1; }

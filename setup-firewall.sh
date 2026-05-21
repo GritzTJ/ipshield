@@ -613,6 +613,17 @@ configure_ipset_restore() {
 
   if [ "$persist" != "1" ]; then
     log "ipset persistence disabled by PERSIST_IPSET=0."
+    # Si un install precedent avait PERSIST_IPSET=1, le service est encore
+    # enabled et chargerait au boot un ipset.save qui ne sera plus rafraichi
+    # par update-blocklist.sh. On le retire ici pour rester coherent.
+    local stale_service="/etc/systemd/system/ipshield-restore.service"
+    if [ -f "$stale_service" ]; then
+      log "Removing stale ipshield-restore.service (PERSIST_IPSET=0)..."
+      systemctl disable --now ipshield-restore.service 2>/dev/null || true
+      rm -f "$stale_service"
+      systemctl daemon-reload 2>/dev/null || true
+      log "ipshield-restore.service removed."
+    fi
     return 0
   fi
 
@@ -785,6 +796,7 @@ configure_logs() {
   local logrotate_app_content
   logrotate_app_content='/var/log/update-blocklist.log {
 	su root root
+	create 0644 root root
 	rotate 4
 	weekly
 	missingok

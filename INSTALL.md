@@ -314,7 +314,7 @@ Unit=ipshield.service
 - `OnCalendar=*-*-* 00,08,16:00:00` fires three times a day.
 - `RandomizedDelaySec=5min` jitters every firing by up to 5 minutes.
 - `Persistent=true` catches up a missed calendar run when the machine was off.
-- Logs (stdout/stderr of `update-blocklist.sh`) go to journald: `journalctl -u ipshield.service` (add `-f` to follow, `-S "1 hour ago"` to scope by time).
+- Logs (stdout/stderr of `update-blocklist.sh`) are appended to `/var/log/update-blocklist.log` (via `StandardOutput=append:` / `StandardError=append:` in the unit) **and** mirrored to journald: `journalctl -u ipshield.service` (add `-f` to follow, `-S "1 hour ago"` to scope by time).
 - Status: `systemctl list-timers ipshield.timer` shows the next firing and the last activation.
 
 #### Manual configuration (alternative)
@@ -331,6 +331,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/path/to/update-blocklist.sh
+StandardOutput=append:/var/log/update-blocklist.log
+StandardError=append:/var/log/update-blocklist.log
 EOF
 
 cat > /etc/systemd/system/ipshield.timer <<'EOF'
@@ -366,6 +368,7 @@ Create `/etc/logrotate.d/update-blocklist`:
 cat > /etc/logrotate.d/update-blocklist << 'EOF'
 /var/log/update-blocklist.log {
 	su root root
+	create 0644 root root
 	rotate 4
 	weekly
 	missingok
@@ -376,7 +379,7 @@ cat > /etc/logrotate.d/update-blocklist << 'EOF'
 EOF
 ```
 
-> The `su root root` directive is required by logrotate >= 3.18 because `/var/log/` is owned by `root:syslog` (group-writable) on Debian/Ubuntu. Without it, rotation is silently skipped on stricter setups. Standard pattern, also used by `/etc/logrotate.d/ubuntu-pro-client`.
+> The `su root root` directive is required by logrotate >= 3.18 because `/var/log/` is owned by `root:syslog` (group-writable) on Debian/Ubuntu. Without it, rotation is silently skipped on stricter setups. Standard pattern, also used by `/etc/logrotate.d/ubuntu-pro-client`. `create 0644 root root` ensures the file exists immediately after rotation (otherwise it would only reappear on the next `ExecStart`).
 
 #### Blocked-IP logs
 
@@ -843,7 +846,7 @@ Unit=ipshield.service
 - `OnCalendar=*-*-* 00,08,16:00:00` déclenche trois fois par jour.
 - `RandomizedDelaySec=5min` ajoute un jitter de jusqu'à 5 minutes à chaque déclenchement.
 - `Persistent=true` rattrape un run calendaire manqué quand la machine était éteinte.
-- Les logs (stdout/stderr d'`update-blocklist.sh`) vont dans journald : `journalctl -u ipshield.service` (ajouter `-f` pour suivre, `-S "1 hour ago"` pour borner dans le temps).
+- Les logs (stdout/stderr d'`update-blocklist.sh`) sont écrits dans `/var/log/update-blocklist.log` (via `StandardOutput=append:` / `StandardError=append:` dans le unit) **et** dupliqués dans journald : `journalctl -u ipshield.service` (ajouter `-f` pour suivre, `-S "1 hour ago"` pour borner dans le temps).
 - État : `systemctl list-timers ipshield.timer` affiche le prochain déclenchement et le dernier passage.
 
 #### Configuration manuelle (alternative)
@@ -860,6 +863,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/chemin/vers/update-blocklist.sh
+StandardOutput=append:/var/log/update-blocklist.log
+StandardError=append:/var/log/update-blocklist.log
 EOF
 
 cat > /etc/systemd/system/ipshield.timer <<'EOF'
@@ -895,6 +900,7 @@ Créer le fichier `/etc/logrotate.d/update-blocklist` :
 cat > /etc/logrotate.d/update-blocklist << 'EOF'
 /var/log/update-blocklist.log {
 	su root root
+	create 0644 root root
 	rotate 4
 	weekly
 	missingok
@@ -905,7 +911,7 @@ cat > /etc/logrotate.d/update-blocklist << 'EOF'
 EOF
 ```
 
-> La directive `su root root` est requise par logrotate >= 3.18 car `/var/log/` appartient à `root:syslog` (group-writable) sur Debian/Ubuntu. Sans elle, la rotation est silencieusement ignorée sur les setups plus stricts. Pattern standard, aussi utilisé par `/etc/logrotate.d/ubuntu-pro-client`.
+> La directive `su root root` est requise par logrotate >= 3.18 car `/var/log/` appartient à `root:syslog` (group-writable) sur Debian/Ubuntu. Sans elle, la rotation est silencieusement ignorée sur les setups plus stricts. Pattern standard, aussi utilisé par `/etc/logrotate.d/ubuntu-pro-client`. `create 0644 root root` garantit que le fichier existe immédiatement après la rotation (sinon il ne réapparaîtrait qu'au prochain `ExecStart`).
 
 #### Logs des IP bloquées
 

@@ -732,6 +732,12 @@ if [ -f "$update_timer" ] || [ -f "$update_service" ]; then
   log "Removing ipshield.timer + ipshield.service..."
   systemctl disable --now ipshield.timer 2>/dev/null || true
   rm -f "$update_timer" "$update_service"
+  # systemd keeps /var/lib/systemd/timers/stamp-<unit>.timer across
+  # disable+rm. If left behind, a reinstall sees the stale stamp, considers
+  # OnBootSec=2min already satisfied in this boot session and OnCalendar
+  # slots not missed, and the freshly enabled timer waits silently until
+  # the next 00/08/16:00 slot -- leaving the host unprotected for up to 8h.
+  rm -f /var/lib/systemd/timers/stamp-ipshield.timer
   systemctl daemon-reload 2>/dev/null || true
   log "ipshield.timer + ipshield.service removed."
 fi

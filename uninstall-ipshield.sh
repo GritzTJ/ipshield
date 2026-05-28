@@ -33,7 +33,7 @@ This script:
   - removes the rsyslog filter (30-ipshield.conf) and logrotate configs;
   - optionally removes /etc/ipshield.conf and the ipset save file
     (separate prompt -- user-editable data);
-  - optionally removes /var/log/ipshield-update.log + /var/log/ipshield.log
+  - optionally removes /var/log/update-ipshield.log + /var/log/ipshield.log
     and their rotated copies (separate prompt -- historical data).
 
 It does NOT uninstall the firewall or any packages (ipset, iptables, etc.).
@@ -413,7 +413,7 @@ done
 
 echo ""
 log "${PREFIX}--- rsyslog + logrotate configs ---"
-log_configs_list=(/etc/rsyslog.d/30-ipshield.conf /etc/logrotate.d/ipshield-update /etc/logrotate.d/ipshield)
+log_configs_list=(/etc/rsyslog.d/30-ipshield.conf /etc/logrotate.d/update-ipshield /etc/logrotate.d/ipshield)
 log_configs_found=0
 for f in "${log_configs_list[@]}"; do
   if [ -f "$f" ]; then
@@ -430,7 +430,7 @@ fi
 echo ""
 log "${PREFIX}--- log files ---"
 log_files=()
-for pattern in /var/log/ipshield-update.log* /var/log/ipshield.log*; do
+for pattern in /var/log/update-ipshield.log* /var/log/ipshield.log*; do
   for f in $pattern; do
     [ -e "$f" ] && log_files+=("$f")
   done
@@ -795,7 +795,7 @@ if [ "${#data_files[@]}" -gt 0 ] || [ "$source_cache_present" -eq 1 ] || [ "$loo
 fi
 
 # --- rsyslog + logrotate config removal (auto) ---
-log_configs=(/etc/rsyslog.d/30-ipshield.conf /etc/logrotate.d/ipshield-update /etc/logrotate.d/ipshield)
+log_configs=(/etc/rsyslog.d/30-ipshield.conf /etc/logrotate.d/update-ipshield /etc/logrotate.d/ipshield)
 present_log_configs=()
 for f in "${log_configs[@]}"; do
   [ -f "$f" ] && present_log_configs+=("$f")

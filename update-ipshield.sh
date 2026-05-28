@@ -258,8 +258,8 @@ if [ "${#WL_TEMP_SET}" -gt 31 ]; then
 fi
 
 # --- Functions ---
-log() { echo "$*"; logger -t "ipshield-update" "$*" 2>/dev/null || true; }
-err() { echo "$*" >&2; logger -t "ipshield-update" -p user.err "$*" 2>/dev/null || true; }
+log() { echo "$*"; logger -t "update-ipshield" "$*" 2>/dev/null || true; }
+err() { echo "$*" >&2; logger -t "update-ipshield" -p user.err "$*" 2>/dev/null || true; }
 fmt_num() { printf "%d" "$1" | sed ':a;s/\([0-9]\)\([0-9]\{3\}\)\($\| \)/\1 \2\3/;ta'; }
 
 cleanup() {

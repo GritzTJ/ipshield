@@ -170,9 +170,9 @@ Customisable via the `URLS` variable in `/etc/ipshield.conf`.
 
 ### Logs
 
-All four firewall paths log via the kernel (netfilter) with the `BLOCKED: ` prefix, so a single rsyslog filter captures everything. `setup-ipshield.sh` writes the filter at `/etc/rsyslog.d/30-ipshield.conf` (redirects `BLOCKED: ` to `/var/log/ipshield.log` and strips the noise-only `MAC=` field) plus two logrotate configs at `/etc/logrotate.d/{ipshield-update,ipshield}` (weekly, rotate 4).
+All four firewall paths log via the kernel (netfilter) with the `BLOCKED: ` prefix, so a single rsyslog filter captures everything. `setup-ipshield.sh` writes the filter at `/etc/rsyslog.d/30-ipshield.conf` (redirects `BLOCKED: ` to `/var/log/ipshield.log` and strips the noise-only `MAC=` field) plus two logrotate configs at `/etc/logrotate.d/{update-ipshield,ipshield}` (weekly, rotate 4).
 
-Rate-limit defaults: `LOG_LIMIT="60/min"` + `LOG_BURST=100`. Packets are always dropped; only a sample is logged under load. Adjust both, or set `LOG_LIMIT=""` to log everything. Timer output goes to `journalctl -u ipshield.service` and `/var/log/ipshield-update.log`.
+Rate-limit defaults: `LOG_LIMIT="60/min"` + `LOG_BURST=100`. Packets are always dropped; only a sample is logged under load. Adjust both, or set `LOG_LIMIT=""` to log everything. Timer output goes to `journalctl -u ipshield.service` and `/var/log/update-ipshield.log`.
 
 ### Docker support
 
@@ -415,9 +415,9 @@ Personnalisable via la variable `URLS` dans `/etc/ipshield.conf`.
 
 ### Logs
 
-Les quatre chemins firewall loguent via le noyau (netfilter) avec le préfixe `BLOCKED: `, donc un seul filtre rsyslog capture tout. `setup-ipshield.sh` écrit le filtre dans `/etc/rsyslog.d/30-ipshield.conf` (redirige `BLOCKED: ` vers `/var/log/ipshield.log` et strippe le champ `MAC=` superflu) et deux configs logrotate dans `/etc/logrotate.d/{ipshield-update,ipshield}` (weekly, rotate 4).
+Les quatre chemins firewall loguent via le noyau (netfilter) avec le préfixe `BLOCKED: `, donc un seul filtre rsyslog capture tout. `setup-ipshield.sh` écrit le filtre dans `/etc/rsyslog.d/30-ipshield.conf` (redirige `BLOCKED: ` vers `/var/log/ipshield.log` et strippe le champ `MAC=` superflu) et deux configs logrotate dans `/etc/logrotate.d/{update-ipshield,ipshield}` (weekly, rotate 4).
 
-Défauts du rate-limit : `LOG_LIMIT="60/min"` + `LOG_BURST=100`. Les paquets sont toujours bloqués ; seul un échantillon est logué sous charge. Ajuster les deux, ou mettre `LOG_LIMIT=""` pour tout loguer. La sortie du timer va dans `journalctl -u ipshield.service` et `/var/log/ipshield-update.log`.
+Défauts du rate-limit : `LOG_LIMIT="60/min"` + `LOG_BURST=100`. Les paquets sont toujours bloqués ; seul un échantillon est logué sous charge. Ajuster les deux, ou mettre `LOG_LIMIT=""` pour tout loguer. La sortie du timer va dans `journalctl -u ipshield.service` et `/var/log/update-ipshield.log`.
 
 ### Support Docker
 

@@ -430,8 +430,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=$script_path
-StandardOutput=append:/var/log/ipshield-update.log
-StandardError=append:/var/log/ipshield-update.log"
+StandardOutput=append:/var/log/update-ipshield.log
+StandardError=append:/var/log/update-ipshield.log"
 
   local timer_content="[Unit]
 Description=ipshield blocklist refresh schedule
@@ -716,8 +716,8 @@ ConditionPathExists=$conf_path
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=$script_path --apply-only
-StandardOutput=append:/var/log/ipshield-update.log
-StandardError=append:/var/log/ipshield-update.log
+StandardOutput=append:/var/log/update-ipshield.log
+StandardError=append:/var/log/update-ipshield.log
 
 [Install]
 WantedBy=multi-user.target"
@@ -771,7 +771,7 @@ configure_logs() {
         log "To view logs: journalctl -k --grep 'BLOCKED:'"
       fi
     else
-      # rsyslog declined: offer logrotate alone (useful for /var/log/ipshield-update.log)
+      # rsyslog declined: offer logrotate alone (useful for /var/log/update-ipshield.log)
       if ! ask_yes_no "Install logrotate alone anyway (without the rsyslog filter)?" yes; then
         log "Logs not configured. View blocked packets via:"
         log "  journalctl -k --grep 'BLOCKED:'"
@@ -802,7 +802,7 @@ if ($msg contains "BLOCKED: ") then {
   # silently skipped on stricter setups. Standard pattern, also used by
   # /etc/logrotate.d/ubuntu-pro-client.
   local logrotate_app_content
-  logrotate_app_content='/var/log/ipshield-update.log {
+  logrotate_app_content='/var/log/update-ipshield.log {
 	su root root
 	create 0644 root root
 	rotate 4
@@ -838,7 +838,7 @@ if ($msg contains "BLOCKED: ") then {
       need_rsyslog_restart=1
     fi
   fi
-  _install_config /etc/logrotate.d/ipshield-update "$logrotate_app_content" "Logrotate ipshield-update" || true
+  _install_config /etc/logrotate.d/update-ipshield "$logrotate_app_content" "Logrotate update-ipshield" || true
   _install_config /etc/logrotate.d/ipshield "$logrotate_blocked_content" "Logrotate ipshield" || true
 
   if [ "$need_rsyslog_restart" -eq 1 ]; then

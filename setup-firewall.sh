@@ -782,12 +782,20 @@ configure_logs() {
   fi
 
   # Expected contents (aligned with INSTALL.md)
+  # Le champ "MAC=<14 octets>" ajoute par iptables LOG est strippe : on bloque par
+  # IP, jamais par MAC, et le filtre bogons garantit que la SRC n'est jamais sur le
+  # meme L2 -- la MAC observee est toujours celle de la gateway, identique partout.
   local rsyslog_content
   rsyslog_content='template(name="blockedFormat" type="string"
-  string="%timestamp:::date-year%-%timestamp:::date-month%-%timestamp:::date-day% %timestamp:::date-hour%:%timestamp:::date-minute%:%timestamp:::date-second% %msg%\n")
+  string="%timestamp:::date-year%-%timestamp:::date-month%-%timestamp:::date-day% %timestamp:::date-hour%:%timestamp:::date-minute%:%timestamp:::date-second%%$.cleanmsg%\n")
 
-:msg, contains, "BLOCKED: " /var/log/blocked-ips.log;blockedFormat
-& stop'
+if ($msg contains "BLOCKED: ") then {
+  set $.pre  = re_extract($msg, "(.*) MAC=[0-9a-fA-F:]+(.*)", 0, 1, $msg);
+  set $.post = re_extract($msg, "(.*) MAC=[0-9a-fA-F:]+(.*)", 0, 2, "");
+  set $.cleanmsg = $.pre & $.post;
+  action(type="omfile" file="/var/log/blocked-ips.log" template="blockedFormat")
+  stop
+}'
 
   # 'su root root' is required by logrotate >= 3.18 when /var/log is owned
   # by root:syslog (Debian/Ubuntu default 775). Without it, rotation is

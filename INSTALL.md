@@ -410,12 +410,19 @@ Create `/etc/rsyslog.d/30-blocked-ips.conf`:
 ```bash
 cat > /etc/rsyslog.d/30-blocked-ips.conf << 'EOF'
 template(name="blockedFormat" type="string"
-  string="%timestamp:::date-year%-%timestamp:::date-month%-%timestamp:::date-day% %timestamp:::date-hour%:%timestamp:::date-minute%:%timestamp:::date-second% %msg%\n")
+  string="%timestamp:::date-year%-%timestamp:::date-month%-%timestamp:::date-day% %timestamp:::date-hour%:%timestamp:::date-minute%:%timestamp:::date-second%%$.cleanmsg%\n")
 
-:msg, contains, "BLOCKED: " /var/log/blocked-ips.log;blockedFormat
-& stop
+if ($msg contains "BLOCKED: ") then {
+  set $.pre  = re_extract($msg, "(.*) MAC=[0-9a-fA-F:]+(.*)", 0, 1, $msg);
+  set $.post = re_extract($msg, "(.*) MAC=[0-9a-fA-F:]+(.*)", 0, 2, "");
+  set $.cleanmsg = $.pre & $.post;
+  action(type="omfile" file="/var/log/blocked-ips.log" template="blockedFormat")
+  stop
+}
 EOF
 ```
+
+The two `re_extract` calls strip the `MAC=<14 bytes>` field added by the iptables `LOG` target: ipshield blocks by IP (never by MAC), and the bogon filter guarantees the source IP is never on the same L2 — the observed source MAC is always the upstream gateway, identical on every line.
 
 Then restart rsyslog:
 
@@ -942,12 +949,19 @@ Créer le fichier `/etc/rsyslog.d/30-blocked-ips.conf` :
 ```bash
 cat > /etc/rsyslog.d/30-blocked-ips.conf << 'EOF'
 template(name="blockedFormat" type="string"
-  string="%timestamp:::date-year%-%timestamp:::date-month%-%timestamp:::date-day% %timestamp:::date-hour%:%timestamp:::date-minute%:%timestamp:::date-second% %msg%\n")
+  string="%timestamp:::date-year%-%timestamp:::date-month%-%timestamp:::date-day% %timestamp:::date-hour%:%timestamp:::date-minute%:%timestamp:::date-second%%$.cleanmsg%\n")
 
-:msg, contains, "BLOCKED: " /var/log/blocked-ips.log;blockedFormat
-& stop
+if ($msg contains "BLOCKED: ") then {
+  set $.pre  = re_extract($msg, "(.*) MAC=[0-9a-fA-F:]+(.*)", 0, 1, $msg);
+  set $.post = re_extract($msg, "(.*) MAC=[0-9a-fA-F:]+(.*)", 0, 2, "");
+  set $.cleanmsg = $.pre & $.post;
+  action(type="omfile" file="/var/log/blocked-ips.log" template="blockedFormat")
+  stop
+}
 EOF
 ```
+
+Les deux appels `re_extract` strippent le champ `MAC=<14 octets>` ajouté par le `LOG` target d'iptables : ipshield bloque par IP (jamais par MAC), et le filtre bogons garantit que l'IP source n'est jamais sur le même L2 — la MAC source observée est toujours celle de la gateway, identique sur chaque ligne.
 
 Puis redémarrer rsyslog :
 

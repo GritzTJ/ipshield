@@ -781,7 +781,7 @@ configure_logs() {
     fi
   fi
 
-  # Expected contents (aligned with INSTALL.md)
+  # Expected contents (aligned with README.md "Logs" section)
   # Le champ "MAC=<14 octets>" ajoute par iptables LOG est strippe : on bloque par
   # IP, jamais par MAC, et le filtre bogons garantit que la SRC n'est jamais sur le
   # meme L2 -- la MAC observee est toujours celle de la gateway, identique partout.

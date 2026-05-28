@@ -21,15 +21,13 @@
 
 ### Features
 
-- Aggregates 11 public IPv4 blocklists into a single ipset
-- Supports iptables, nftables, firewalld and ufw (auto-detected, idempotent)
-- Bogon filter (RFC 6890) rejects RFC1918, loopback, link-local and multicast from upstream sources to prevent self-blocking
-- Inbound-only Docker protection on `DOCKER-USER`, scoped to the WAN interface
-- Whitelist with prefix-width safeguard against accidental `0.0.0.0/0`
-- Zero-downtime updates via atomic ipset swap
-- Survives reboot: ipset is persisted and rules are reattached in under two seconds
-- Guided one-shot setup (`setup-firewall.sh`), clean dry-run uninstall
-- Single configuration file (`/etc/update-blocklist.conf`)
+- Blocks known-malicious IPv4 addresses sourced from public threat feeds (lists fully customisable)
+- Works on the four major Linux firewalls (iptables, nftables, firewalld, ufw) — auto-detected, no manual rule writing
+- Self-protective: never blocks your LAN, Docker bridge or internal ranges, even if an upstream feed is corrupted
+- Protects Docker containers exposed to the Internet, without restricting outbound traffic
+- Whitelist for trusted hosts (admin, jump servers) with safeguards against catastrophic typos
+- Updates without interrupting connections, restored within seconds after a reboot
+- One-command guided install, clean dry-run uninstall
 
 ### Supported firewalls
 
@@ -268,15 +266,13 @@ iptables -I DOCKER-USER 2 -i ens160 -m conntrack --ctstate NEW -m set --match-se
 
 ### Fonctionnalités
 
-- Agrège 11 listes publiques d'IPv4 malveillantes dans un seul ipset
-- Supporte iptables, nftables, firewalld et ufw (auto-détectés, idempotents)
-- Filtre des bogons (RFC 6890) : rejette RFC1918, loopback, link-local et multicast issus des sources externes pour éviter l'auto-blocage
-- Protection Docker en entrée uniquement sur `DOCKER-USER`, scopée à l'interface WAN
-- Whitelist avec garde-fou de préfixe contre un `0.0.0.0/0` accidentel
-- Mises à jour sans interruption via swap atomique d'ipset
-- Survit au reboot : ipset persisté et règles réattachées en moins de deux secondes
-- Setup guidé one-shot (`setup-firewall.sh`), désinstallation propre avec dry-run
-- Un seul fichier de configuration (`/etc/update-blocklist.conf`)
+- Bloque les adresses IPv4 malveillantes issues de feeds publics de threat intelligence (listes entièrement personnalisables)
+- Fonctionne sur les quatre principaux firewalls Linux (iptables, nftables, firewalld, ufw) — auto-détectés, aucune règle à écrire à la main
+- Auto-protecteur : ne bloque jamais votre LAN, le bridge Docker ou les plages internes, même si un feed amont est corrompu
+- Protège les conteneurs Docker exposés à Internet, sans entraver le trafic sortant
+- Whitelist pour les hôtes de confiance (admin, bastions) avec garde-fous contre les typos catastrophiques
+- Mises à jour sans interrompre les connexions, protection restaurée en quelques secondes après un reboot
+- Installation guidée en une commande, désinstallation propre avec dry-run
 
 ### Firewalls supportés
 

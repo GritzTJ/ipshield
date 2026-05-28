@@ -17,30 +17,19 @@
 
 ### Description
 
-`ipshield` is a set of bash scripts that download public malicious IP lists, aggregate them into an ipset, and automatically apply blocking rules on the detected firewall.
-
-Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
-
-`v1.1.0` has been validated on Internet-exposed server scenarios with Ubuntu 24.04 LTS, Debian 12, Debian 13 and Fedora 44. v1.1.0 adds per-source last-known-good caching, the `ipshield.timer`/`ipshield.service` systemd schedule (replacing the cron line) and the `ipshield-apply.service` boot-time fast attach.
+`ipshield` is a set of bash scripts that download public malicious IPv4 lists, aggregate them into an ipset, and apply blocking rules on the detected firewall. Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers, validated on Internet-exposed scenarios.
 
 ### Features
 
-- **11 curated public IPv4 blocklists** aggregated into a single ipset (Spamhaus, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, Tor exits, Internet Scanner ranges)
-- **RFC 6890 bogon filter**: rejects RFC1918, loopback, link-local, multicast and other reserved ranges from upstream sources to prevent self-blocking the LAN or Docker bridge
-- **Four supported firewalls**: iptables, nftables, firewalld, ufw — auto-detected and applied idempotently
-- **Blocklist-focused protection**: ipshield is not a full default-deny firewall; with direct iptables/nftables, non-blacklisted traffic remains accepted unless you harden the host separately
-- **Docker-aware**: inbound-only protection of the `DOCKER-USER` chain, scoped to the WAN interface (container egress is never filtered); firewalld systems use runtime `DOCKER-USER` rules so Docker boot ordering cannot break firewalld
-- **Docker-safe setup**: firewall transitions and iptables backend switches offer a guided maintenance path when Docker chains are present, while recommending a clean application/Compose shutdown first if containers are running. When the transition is provably non-destructive (target iptables/nftables, no firewall to deactivate, backend already aligned), Docker is left running. On every `nftables` install or rerun, ipshield combines two patches so that `systemctl restart nftables` (at boot, on package upgrade, or manually) no longer wipes the iptables-nft blocklist rules (or Docker rules, when present): `/etc/nftables.conf` has `flush ruleset` commented out (backup `.ipshield.bak`), and a systemd drop-in `/etc/systemd/system/nftables.service.d/ipshield.conf` clears the default `ExecStop=nft flush ruleset`
-- **Policy-aware safe ports**: the listening-ports prompt is skipped when the chosen firewall has a permissive INPUT policy (the common Debian/Ubuntu default with iptables/nftables) since the ACCEPT rules would be no-ops; when the policy is deny-by-default (ufw, firewalld, or a hardened iptables/nftables), the chosen ports are persisted across reboot via `ipshield-safe-ports.service` so SSH is restored at boot before sshd starts
-- **UFW-aware setup**: inactive UFW service state is detected, and transitions away from UFW clean ipshield/orphan ipset lines from `before.rules`
-- **Whitelist** of trusted IPs/subnets (management, jump hosts) with prefix-width safeguard against accidental `0.0.0.0/0`
-- **Zero-downtime updates** via atomic ipset swap
-- **Boot-safe ipset persistence** for persistent firewalls (`ufw`, `firewalld`, `nftables`)
-- **Fast boot recovery**: `ipshield-apply.service` (ordered `After=docker.service`) attaches blocklist rules to the restored ipset within seconds of Docker being up, closing the historical boot exposure window. Falls back to a full update if the ipset save is missing
-- **Guided setup**: `setup-firewall.sh` installs the firewall, configures `ipshield.timer` (8-hour systemd schedule, logs to journald), drops the rsyslog filter and logrotate configs
-- **Cached lookup helper**: `lookup-ip.sh` can identify which source lists an IP without re-downloading every source on each call
-- **Clean uninstall** with dry-run preview and confirmation
-- **Single configuration file** (`/etc/update-blocklist.conf`) drives everything; no defaults hard-coded in scripts
+- Aggregates 11 public IPv4 blocklists into a single ipset
+- Supports iptables, nftables, firewalld and ufw (auto-detected, idempotent)
+- Bogon filter (RFC 6890) rejects RFC1918, loopback, link-local and multicast from upstream sources to prevent self-blocking
+- Inbound-only Docker protection on `DOCKER-USER`, scoped to the WAN interface
+- Whitelist with prefix-width safeguard against accidental `0.0.0.0/0`
+- Zero-downtime updates via atomic ipset swap
+- Survives reboot: ipset is persisted and rules are reattached in under two seconds
+- Guided one-shot setup (`setup-firewall.sh`), clean dry-run uninstall
+- Single configuration file (`/etc/update-blocklist.conf`)
 
 ### Supported firewalls
 
@@ -60,11 +49,11 @@ Designed for **Debian/Ubuntu** and **Fedora/RHEL** servers.
 | Debian 13 | nftables, iptables legacy |
 | Fedora 44 | firewalld, nftables |
 
-Validation included fresh installation, blocklist update, reboot restore, TCP/UDP inbound blocking, Docker `DOCKER-USER` protection, logging/logrotate and clean uninstall where applicable.
+Validated end-to-end on each row: install, blocklist refresh, reboot restore, Docker `DOCKER-USER` protection, logs/logrotate and uninstall.
 
 ### Prerequisites
 
-Root access plus the following commands: `curl`, `awk`, `sort`, `wc`, `date`, `comm`, `flock`, `ipset`, `logger`.
+Root access. `setup-firewall.sh` installs missing packages automatically; the table below lists them for reference and manual setups.
 
 | Tool | Package (Debian/Ubuntu) | Package (Fedora) |
 |---|---|---|
@@ -75,14 +64,6 @@ Root access plus the following commands: `curl`, `awk`, `sort`, `wc`, `date`, `c
 | `logger` | bsdutils | util-linux |
 | `sort`, `wc`, `date`, `comm` | coreutils | coreutils |
 
-```bash
-# Debian / Ubuntu
-apt update && apt install -y curl gawk coreutils ipset util-linux bsdutils
-
-# Fedora
-dnf install -y curl gawk coreutils ipset util-linux
-```
-
 ### Installation
 
 ```bash
@@ -92,40 +73,33 @@ chmod 700 *.sh
 sudo ./setup-firewall.sh
 ```
 
-`setup-firewall.sh` is the recommended entry point. It detects/installs the firewall, copies `update-blocklist.conf.example` to `/etc/update-blocklist.conf`, installs `ipshield.timer` + `ipshield.service` (8-hour refresh + `OnBootSec=2min`), `ipshield-restore.service` (boot-time ipset restore), `ipshield-apply.service` (boot-time fast rule attach, ordered `After=docker.service`), the rsyslog filter, and the two logrotate configs. Everything is idempotent — rerun to reconfigure.
+`setup-firewall.sh` detects/installs the firewall, copies the config to `/etc/update-blocklist.conf`, and installs `ipshield.timer` + `ipshield.service` (8-hour refresh + `OnBootSec=2min`), `ipshield-restore.service` + `ipshield-apply.service` (close the boot exposure window to under two seconds), the rsyslog filter and the two logrotate configs. Idempotent — rerun to reconfigure.
 
-Backend selection:
-
-- **iptables** target picks `iptables-legacy`/`ip6tables-legacy` via `update-alternatives` when available.
-- **nftables** target picks `iptables-nft`/`ip6tables-nft` — ipshield applies rules through `iptables-nft` to preserve ipset matching.
-
-The anti-lockout prompt is **skipped** when the chosen firewall has a permissive INPUT policy (typical Debian/Ubuntu default) since ACCEPT rules would be no-ops. With a deny-by-default firewall (ufw, firewalld, or a hardened iptables/nftables) the chosen ports are persisted via `ipshield-safe-ports.service`, ordered before sshd/docker so SSH is restored at boot.
-
-Security scope: ipshield installs blocklist rules. It does **not** turn direct `iptables`/`nftables` into a default-deny firewall — non-blacklisted traffic stays accepted unless you harden the host separately.
+ipshield installs blocklist rules only; on direct `iptables`/`nftables`, non-blacklisted traffic stays accepted unless you harden the host separately.
 
 ### Configuration
 
-`/etc/update-blocklist.conf` is **required** by `update-blocklist.sh` and `lookup-ip.sh`. It is the single source of truth for URLs and defaults. `setup-firewall.sh` copies it from `update-blocklist.conf.example` (chmod 600, owner root) when missing; an existing file is left intact.
+`/etc/update-blocklist.conf` is the single source of truth. `setup-firewall.sh` copies it from `update-blocklist.conf.example` (chmod 600, owner root) when missing; an existing file is left intact.
 
 | Variable | Default | Description |
 |---|---|---|
 | `URLS` | see [Blocklist sources](#blocklist-sources) | Array of blocklist URLs |
 | `SET_NAME` | `blacklist` | ipset blacklist name (max 31 chars) |
 | `WHITELIST_SET_NAME` | `${SET_NAME}-allow` | ipset whitelist name (max 31 chars) |
-| `WHITELIST` | `()` (empty) | Array of always-allowed IPv4 addresses/CIDRs (see [Whitelist](#whitelist)) |
-| `WHITELIST_MIN_PREFIX` | `8` | Minimum WHITELIST prefix accepted (rejects /0 to /7 to prevent total bypass via typo). Set to 0 to disable. |
-| `BLOCKLIST_MIN_PREFIX` | `8` | Minimum prefix accepted from external sources (rejects /0 to /7 — catches a corrupted/malicious source pushing `0.0.0.0/0`). Set to 0 to disable. |
-| `MIN_ENTRIES` | `1000` | Minimum entries threshold (anti-purge protection) |
+| `WHITELIST` | `()` (empty) | Always-allowed IPv4 addresses/CIDRs (see [Whitelist](#whitelist)) |
+| `WHITELIST_MIN_PREFIX` | `8` | Minimum WHITELIST prefix accepted (rejects /0–/7). Set to 0 to disable. |
+| `BLOCKLIST_MIN_PREFIX` | `8` | Minimum prefix accepted from external sources (catches a `0.0.0.0/0` push). Set to 0 to disable. |
+| `MIN_ENTRIES` | `1000` | Minimum entries threshold (anti-purge) |
 | `BASE_HASHSIZE` | `16384` | Base ipset hashsize |
 | `BASE_MAXELEM` | `300000` | Base ipset maxelem |
-| `LOG_LIMIT` | `60/min` | Blocked-packet log rate-limit (`N/sec`, `N/min`, `N/hour`, `N/day`; empty = no limit) |
+| `LOG_LIMIT` | `60/min` | Blocked-packet log rate-limit (empty = no limit) |
 | `LOG_BURST` | `100` | Maximum burst before `LOG_LIMIT` applies |
-| `WAN_INTERFACE` | `""` (auto) | WAN interface used to scope the DOCKER-USER rule to inbound only. Empty = auto-detected via `ip route get 8.8.8.8`. Set explicitly on VPN/multi-homed hosts. |
-| `PERSIST_IPSET` | `1` | Save ipshield ipsets after each successful run for boot-time restore (`0` disables). |
+| `WAN_INTERFACE` | `""` (auto) | WAN interface for DOCKER-USER scoping. Empty = auto via `ip route get 8.8.8.8`. |
+| `PERSIST_IPSET` | `1` | Save ipshield ipsets after each successful run for boot-time restore. |
 | `IPSET_SAVE_FILE` | `/var/lib/ipshield/ipset.save` | Path to the ipset save file. |
-| `LOOKUP_CACHE_TTL` | `21600` | Cache TTL in seconds for `lookup-ip.sh` source downloads (`0` disables cache). |
+| `LOOKUP_CACHE_TTL` | `21600` | Cache TTL in seconds for `lookup-ip.sh` (`0` disables). |
 
-All variables are documented inline in `update-blocklist.conf.example` (the file copied to `/etc/`).
+All variables are documented inline in `update-blocklist.conf.example`.
 
 ### Usage
 
@@ -151,9 +125,7 @@ sudo ./update-blocklist.sh --verbose
 ./lookup-ip.sh 185.199.108.133
 ```
 
-`lookup-ip.sh` caches downloads in `/var/cache/ipshield/lookup/` (root) or `${XDG_CACHE_HOME:-$HOME/.cache}/ipshield/lookup/` (user), one file per URL named `<sha256(URL)>.txt`. Files older than `LOOKUP_CACHE_TTL` are refreshed atomically; orphans from removed URLs are pruned at each run. For a one-shot bypass: `LOOKUP_CACHE_TTL=0 ./lookup-ip.sh <ip>`.
-
-`update-blocklist.sh` works standalone (without `setup-firewall.sh`) — it auto-detects the existing firewall.
+`lookup-ip.sh` caches downloads in `/var/cache/ipshield/lookup/` for `LOOKUP_CACHE_TTL` seconds (default 6 h; `LOOKUP_CACHE_TTL=0` disables). `update-blocklist.sh` works standalone — it auto-detects the existing firewall.
 
 ### Whitelist
 
@@ -171,7 +143,7 @@ On the next run, `update-blocklist.sh` creates `${SET_NAME}-allow` via atomic sw
 
 > **Warning**: the ACCEPT rule bypasses **the entire firewall**, not only the blocklist. A whitelisted IP has full server access regardless of other rules.
 
-> **Anti-typo safeguard**: by default, any prefix `< /8` is rejected (`WHITELIST_MIN_PREFIX=8`). Blocks the classic `0.0.0.0/0` typo that would open the whole Internet. Lower `WHITELIST_MIN_PREFIX` explicitly to allow a wider prefix.
+> **Anti-typo safeguard**: by default, any prefix `< /8` is rejected (`WHITELIST_MIN_PREFIX=8`). Blocks the classic `0.0.0.0/0` typo. Lower `WHITELIST_MIN_PREFIX` explicitly to allow a wider prefix.
 
 ### Scripts
 
@@ -198,43 +170,17 @@ On the next run, `update-blocklist.sh` creates `${SET_NAME}-allow` via atomic sw
 | [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Tor exit nodes |
 | [Internet Scanner IPs](https://github.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs) | Aggregated /24 ranges of known internet scanners (Shodan, Censys, ONYPHE, GreyNoise, etc.) |
 
-Sources are customisable via the `URLS` variable in `/etc/update-blocklist.conf`.
+Customisable via the `URLS` variable in `/etc/update-blocklist.conf`.
 
 ### Logs
 
-All four firewall paths log blocked packets through the kernel (netfilter) with the `BLOCKED: ` prefix, so a single rsyslog filter captures everything.
+All four firewall paths log via the kernel (netfilter) with the `BLOCKED: ` prefix, so a single rsyslog filter captures everything. `setup-firewall.sh` writes the filter at `/etc/rsyslog.d/30-blocked-ips.conf` (redirects `BLOCKED: ` to `/var/log/blocked-ips.log` and strips the noise-only `MAC=` field) plus two logrotate configs at `/etc/logrotate.d/{update-blocklist,blocked-ips}` (weekly, rotate 4).
 
-| Firewall | Log mechanism |
-|---|---|
-| iptables | `-j LOG --log-prefix "BLOCKED: "` → kernel log → syslog |
-| nftables | via `iptables-nft`: `-j LOG --log-prefix "BLOCKED: "` → kernel log → syslog |
-| firewalld | direct rules with `-j LOG` (same mechanism) → kernel log → syslog |
-| ufw | `before.rules` with `-j LOG` (same mechanism) → kernel log → syslog |
-
-`setup-firewall.sh` installs the rsyslog filter at `/etc/rsyslog.d/30-blocked-ips.conf` (redirects `BLOCKED: ` to `/var/log/blocked-ips.log` and strips the `MAC=<14 bytes>` field, which carries no useful information — ipshield blocks by IP, never by MAC, and the bogon filter guarantees the source IP is never on the same L2). Two logrotate configs are installed at `/etc/logrotate.d/update-blocklist` and `/etc/logrotate.d/blocked-ips` (weekly, rotate 4, with the portable `rsyslog-rotate` postrotate hook).
-
-Rate-limit defaults: `LOG_LIMIT="60/min"` + `LOG_BURST=100`. Under heavy load, all packets are still dropped but only a sample appears in the logs. Set `LOG_LIMIT=""` to log everything (flood risk under attack) or raise both values for more visibility. Drift is auto-detected — rerun `update-blocklist.sh` after editing the config to refresh the rules.
-
-The timer's own output (`update-blocklist.sh` stdout/stderr) is appended to `/var/log/update-blocklist.log` and mirrored to journald: `journalctl -u ipshield.service` (add `-f` to follow, `-S "1 hour ago"` to scope by time). `systemctl list-timers ipshield.timer` shows the next firing.
-
-### Boot-time persistence and fast attach
-
-The `ipset blacklist` lives in RAM and the LOG/DROP rules referencing it are runtime-only. Without a dedicated boot mechanism, the host would be fail-open for the first 30+ seconds after every reboot. ipshield ships two systemd units that close the window to under two seconds:
-
-1. **`ipshield-restore.service`** — early-boot oneshot, ordered `Before=netfilter-persistent.service nftables.service ufw.service firewalld.service`. Runs `ipset restore -! -f $IPSET_SAVE_FILE`. Indispensable for `ufw`/`firewalld` on `iptables-nft`, which otherwise fail to start when their persistent rules reference an ipset that does not exist yet.
-2. **`ipshield-apply.service`** — runs `update-blocklist.sh --apply-only`, ordered `After=ipshield-restore.service nftables.service docker.service`. The Docker ordering is opportunistic (no `Wants=`/`Requires=`) so on a Docker-less host it fires as soon as the other constraints are satisfied. Skips the download/parse/swap cycle and just attaches LOG/DROP rules (and DOCKER-USER rules when applicable) to the restored ipset. Falls back to a full update if the ipset save is missing or empty — the host is never left unprotected.
-
-`update-blocklist.sh` saves the ipshield sets (`SET_NAME` and `WHITELIST_SET_NAME` when present) after each successful run when `PERSIST_IPSET=1` (default), feeding both units. The `OnBootSec=2min` timer trigger then refreshes the blocklist from the network shortly after boot.
+Rate-limit defaults: `LOG_LIMIT="60/min"` + `LOG_BURST=100`. Packets are always dropped; only a sample is logged under load. Adjust both, or set `LOG_LIMIT=""` to log everything. Timer output goes to `journalctl -u ipshield.service` and `/var/log/update-blocklist.log`.
 
 ### Docker support
 
-Traffic destined for containers (ports published via `-p` / `ports:`) flows through `FORWARD`, not `INPUT`. ipshield auto-detects Docker via the `DOCKER-USER` chain and applies the same LOG + DROP rules there, **scoped to `-i $WAN_INTERFACE`** so only inbound traffic from the Internet is filtered — container egress (`IN=br-xxx`) is never touched. Bogons are rejected up front, so the LAN and Docker bridge are never blacklisted.
-
-Blocklist rules are scoped to `conntrack --ctstate NEW`: replies to outbound connections already tracked as `ESTABLISHED` are not dropped even if the remote endpoint appears in a public blocklist.
-
-On **firewalld**, `INPUT` uses permanent direct rules but `DOCKER-USER` rules are kept runtime-only. Storing them as permanent direct rules would let firewalld fail to start/reload when Docker has not yet created the chain. Any leftover permanent Docker rule from earlier ipshield versions is cleaned up before the runtime rule is applied.
-
-Docker recreates `DOCKER-USER` on every daemon restart, so the rules do not persist — `ipshield-apply.service` at boot and `ipshield.timer` (`OnBootSec=2min` + 8h cadence) reapply them idempotently. If `WAN_INTERFACE` auto-detection picks the wrong interface (VPN/multi-homed), set it explicitly in `/etc/update-blocklist.conf`.
+Auto-detected via the `DOCKER-USER` chain. LOG + DROP rules are scoped to `-i $WAN_INTERFACE` so only inbound traffic from the Internet is filtered — container egress is untouched. `ctstate NEW` keeps replies to established outbound connections from being dropped. If WAN auto-detection picks the wrong interface (VPN/multi-homed), set `WAN_INTERFACE` explicitly in `/etc/update-blocklist.conf`.
 
 ### Uninstall
 
@@ -246,14 +192,7 @@ sudo ./uninstall.sh
 sudo ./uninstall.sh --apply
 ```
 
-`--apply` removes ipshield rules (LOG/DROP blocklist + ACCEPT whitelist), destroys the associated ipsets, cleans ipshield/orphan lines from `/etc/ufw/before.rules` line by line, and removes the project-owned components without further prompts: `ipshield-restore.service`, `ipshield-apply.service`, `ipshield.timer` + `ipshield.service`, `ipshield-safe-ports.service`, the `nftables.service` drop-in (restoring `/etc/nftables.conf` from `.ipshield.bak`), and `/etc/rsyslog.d/30-blocked-ips.conf` + `/etc/logrotate.d/{update-blocklist,blocked-ips}` (rsyslog is restarted if the filter is removed).
-
-Two final prompts offer to remove user-editable data:
-
-1. `/etc/update-blocklist.conf`, the ipset save file, the LKG cache (`/var/lib/ipshield/sources/`), and the root `lookup-ip.sh` cache (`/var/cache/ipshield/lookup/`).
-2. ipshield log files (`/var/log/update-blocklist.log*` and `/var/log/blocked-ips.log*`, including rotated/compressed files).
-
-`uninstall.sh` does **not** uninstall the firewall or any packages. Journald entries are not purged (vacuuming is a global system operation).
+`--apply` removes ipshield rules, ipsets and project-owned components (timer, services, rsyslog filter, logrotate, `nftables.service` drop-in, `before.rules` lines) without further prompts, then asks separately whether to remove `/etc/update-blocklist.conf`, the cache directories and the log files. The firewall and packages are never uninstalled.
 
 ### Manual firewall rules (advanced)
 
@@ -325,30 +264,19 @@ iptables -I DOCKER-USER 2 -i ens160 -m conntrack --ctstate NEW -m set --match-se
 
 ### Description
 
-`ipshield` est un ensemble de scripts bash qui téléchargent des listes publiques d'adresses IP malveillantes, les agrègent dans un set ipset, et appliquent automatiquement les règles de blocage sur le firewall détecté.
-
-Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
-
-`v1.1.0` a été validée sur des scénarios de serveurs exposés sur Internet avec Ubuntu 24.04 LTS, Debian 12, Debian 13 et Fedora 44. v1.1.0 ajoute le cache last-known-good par source, la planification systemd `ipshield.timer`/`ipshield.service` (remplaçant la ligne cron) et le fast attach au boot via `ipshield-apply.service`.
+`ipshield` est un ensemble de scripts bash qui téléchargent des listes publiques d'IPv4 malveillantes, les agrègent dans un ipset et appliquent les règles de blocage sur le firewall détecté. Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**, validé sur scénarios exposés sur Internet.
 
 ### Fonctionnalités
 
-- **11 listes publiques d'IPv4 malveillantes** agrégées dans un seul ipset (Spamhaus, Emerging Threats, AbuseIPDB, CINS, Data-Shield, FireHOL Level 1, GreenSnow, Blocklist.de, IPsum, nœuds de sortie Tor, ranges de scanners Internet)
-- **Filtre des bogons RFC 6890** : rejette RFC1918, loopback, link-local, multicast et autres plages réservées issues des sources externes, afin d'éviter d'auto-bloquer le LAN ou le bridge Docker
-- **Quatre firewalls supportés** : iptables, nftables, firewalld, ufw — détection automatique et application idempotente des règles
-- **Protection centrée blocklist** : ipshield n'est pas un firewall default-deny complet ; avec iptables/nftables directs, le trafic non blacklisté reste accepté sauf durcissement séparé de l'hôte
-- **Compatible Docker** : protection de la chaîne `DOCKER-USER` en entrée uniquement, scopée à l'interface WAN (l'egress des conteneurs n'est jamais filtré) ; avec firewalld, les règles `DOCKER-USER` restent runtime pour ne pas casser firewalld au boot si Docker n'a pas encore créé la chaîne
-- **Setup compatible Docker** : les transitions firewall et changements de backend iptables proposent un chemin de maintenance guidé lorsque des chaînes Docker sont présentes, en recommandant d'abord un arrêt propre applicatif/Compose si des conteneurs tournent. Quand la transition est non destructrice (cible iptables/nftables, aucun firewall à désactiver, backend déjà aligné), Docker reste en ligne. À chaque installation ou rerun avec cible `nftables`, ipshield combine deux patches pour que `systemctl restart nftables` (au boot, sur upgrade de paquet ou manuellement) ne vide plus les règles iptables-nft de blocklist (ni celles de Docker quand présentes) : `/etc/nftables.conf` voit son `flush ruleset` commenté (sauvegarde `.ipshield.bak`), et un drop-in systemd `/etc/systemd/system/nftables.service.d/ipshield.conf` vide l'`ExecStop=nft flush ruleset` par défaut
-- **SAFE_PORTS adaptés à la politique INPUT** : le prompt des ports en écoute est sauté quand le firewall a une politique INPUT permissive (cas par défaut Debian/Ubuntu avec iptables/nftables) car les ACCEPT seraient des no-ops ; quand la politique est deny-by-default (ufw, firewalld, ou iptables/nftables durci), les ports choisis sont persistés via `ipshield-safe-ports.service` pour que SSH soit rétabli au boot avant le démarrage de sshd
-- **Setup conscient d'UFW** : l'état de service UFW inactif est détecté, et les transitions hors UFW nettoient les lignes ipshield/orphelines avec ipset dans `before.rules`
-- **Whitelist** d'IP/subnets de confiance (management, bastions) avec garde-fou de préfixe pour empêcher un `0.0.0.0/0` accidentel
-- **Mise à jour sans interruption** par swap atomique d'ipset
-- **Persistance ipset au boot** pour les firewalls persistants (`ufw`, `firewalld`, `nftables`)
-- **Récupération rapide au boot** : `ipshield-apply.service` (ordonné `After=docker.service`) attache les règles blocklist à l'ipset restauré quelques secondes après le démarrage de Docker, ce qui ferme l'ancienne fenêtre d'exposition au boot. Fallback automatique vers un update complet si la sauvegarde ipset manque
-- **Installation guidée** : `setup-firewall.sh` installe le firewall, configure `ipshield.timer` (planification systemd toutes les 8 h, logs vers journald), dépose le filtre rsyslog et les configs logrotate
-- **Lookup avec cache** : `lookup-ip.sh` identifie la source qui référence une IP sans retélécharger toutes les listes à chaque appel
-- **Désinstallation propre** avec mode dry-run et confirmation
-- **Fichier de configuration unique** (`/etc/update-blocklist.conf`) qui pilote l'ensemble ; aucun défaut codé en dur dans les scripts
+- Agrège 11 listes publiques d'IPv4 malveillantes dans un seul ipset
+- Supporte iptables, nftables, firewalld et ufw (auto-détectés, idempotents)
+- Filtre des bogons (RFC 6890) : rejette RFC1918, loopback, link-local et multicast issus des sources externes pour éviter l'auto-blocage
+- Protection Docker en entrée uniquement sur `DOCKER-USER`, scopée à l'interface WAN
+- Whitelist avec garde-fou de préfixe contre un `0.0.0.0/0` accidentel
+- Mises à jour sans interruption via swap atomique d'ipset
+- Survit au reboot : ipset persisté et règles réattachées en moins de deux secondes
+- Setup guidé one-shot (`setup-firewall.sh`), désinstallation propre avec dry-run
+- Un seul fichier de configuration (`/etc/update-blocklist.conf`)
 
 ### Firewalls supportés
 
@@ -368,11 +296,11 @@ Conçu pour les serveurs **Debian/Ubuntu** et **Fedora/RHEL**.
 | Debian 13 | nftables, iptables legacy |
 | Fedora 44 | firewalld, nftables |
 
-La validation couvre l'installation fraîche, la mise à jour de blocklist, la restauration après reboot, le blocage TCP/UDP entrant, la protection Docker `DOCKER-USER`, les logs/logrotate et la désinstallation propre lorsque applicable.
+Validé end-to-end sur chaque ligne : install, refresh blocklist, restauration au reboot, protection Docker `DOCKER-USER`, logs/logrotate et désinstallation.
 
 ### Prérequis
 
-Accès **root** et les commandes suivantes : `curl`, `awk`, `sort`, `wc`, `date`, `comm`, `flock`, `ipset`, `logger`.
+Accès root. `setup-firewall.sh` installe automatiquement les paquets manquants ; la table ci-dessous les liste pour référence et pour les setups manuels.
 
 | Outil | Paquet (Debian/Ubuntu) | Paquet (Fedora) |
 |---|---|---|
@@ -383,14 +311,6 @@ Accès **root** et les commandes suivantes : `curl`, `awk`, `sort`, `wc`, `date`
 | `logger` | bsdutils | util-linux |
 | `sort`, `wc`, `date`, `comm` | coreutils | coreutils |
 
-```bash
-# Debian / Ubuntu
-apt update && apt install -y curl gawk coreutils ipset util-linux bsdutils
-
-# Fedora
-dnf install -y curl gawk coreutils ipset util-linux
-```
-
 ### Installation
 
 ```bash
@@ -400,40 +320,33 @@ chmod 700 *.sh
 sudo ./setup-firewall.sh
 ```
 
-`setup-firewall.sh` est le point d'entrée recommandé. Il détecte/installe le firewall, copie `update-blocklist.conf.example` vers `/etc/update-blocklist.conf`, installe `ipshield.timer` + `ipshield.service` (refresh 8 h + `OnBootSec=2min`), `ipshield-restore.service` (restore ipset au boot), `ipshield-apply.service` (fast attach des règles au boot, ordonné `After=docker.service`), le filtre rsyslog et les deux configs logrotate. Tout est idempotent — relancer pour reconfigurer.
+`setup-firewall.sh` détecte/installe le firewall, copie la config vers `/etc/update-blocklist.conf`, et installe `ipshield.timer` + `ipshield.service` (refresh 8 h + `OnBootSec=2min`), `ipshield-restore.service` + `ipshield-apply.service` (ferment la fenêtre d'exposition au boot à moins de deux secondes), le filtre rsyslog et les deux configs logrotate. Idempotent — relancer pour reconfigurer.
 
-Sélection du backend :
-
-- La cible **iptables** sélectionne `iptables-legacy`/`ip6tables-legacy` via `update-alternatives` quand disponible.
-- La cible **nftables** sélectionne `iptables-nft`/`ip6tables-nft` — ipshield applique ses règles via `iptables-nft` pour conserver le support du match ipset.
-
-Le prompt anti-lockout est **sauté** quand le firewall choisi a une politique INPUT permissive (cas par défaut Debian/Ubuntu) car les ACCEPT seraient des no-ops. Avec un firewall deny-by-default (ufw, firewalld, ou iptables/nftables durci) les ports choisis sont persistés via `ipshield-safe-ports.service`, ordonné avant sshd/docker pour que SSH soit rétabli au boot.
-
-Périmètre sécurité : ipshield installe des règles de blocklist. Il ne transforme pas `iptables`/`nftables` directs en firewall default-deny complet — le trafic non blacklisté reste accepté sauf durcissement séparé de l'hôte.
+ipshield installe uniquement des règles de blocklist ; avec `iptables`/`nftables` directs, le trafic non blacklisté reste accepté sauf durcissement séparé de l'hôte.
 
 ### Configuration
 
-`/etc/update-blocklist.conf` est **requis** par `update-blocklist.sh` et `lookup-ip.sh`. C'est la source de vérité unique pour les URLs et les défauts. `setup-firewall.sh` le copie depuis `update-blocklist.conf.example` (chmod 600, owner root) s'il est absent ; un fichier existant est laissé intact.
+`/etc/update-blocklist.conf` est la source de vérité unique. `setup-firewall.sh` le copie depuis `update-blocklist.conf.example` (chmod 600, owner root) s'il est absent ; un fichier existant est laissé intact.
 
 | Variable | Défaut | Description |
 |---|---|---|
 | `URLS` | voir [Sources de blocage](#sources-de-blocage) | Tableau des URLs de listes de blocage |
 | `SET_NAME` | `blacklist` | Nom du set ipset blacklist (max 31 caractères) |
 | `WHITELIST_SET_NAME` | `${SET_NAME}-allow` | Nom du set ipset whitelist (max 31 caractères) |
-| `WHITELIST` | `()` (vide) | Tableau d'IP/CIDR IPv4 toujours autorisés (voir [Whitelist](#whitelist-1)) |
-| `WHITELIST_MIN_PREFIX` | `8` | Préfixe minimum accepté en WHITELIST (rejette /0 à /7 pour éviter un bypass total par typo). Mettre à 0 pour désactiver. |
-| `BLOCKLIST_MIN_PREFIX` | `8` | Préfixe minimum accepté depuis les sources externes (rejette /0 à /7 — protège contre une source corrompue/malveillante qui pousserait `0.0.0.0/0`). Mettre à 0 pour désactiver. |
-| `MIN_ENTRIES` | `1000` | Seuil minimum d'entrées (protection anti-purge) |
+| `WHITELIST` | `()` (vide) | IP/CIDR IPv4 toujours autorisés (voir [Whitelist](#whitelist-1)) |
+| `WHITELIST_MIN_PREFIX` | `8` | Préfixe minimum accepté en WHITELIST (rejette /0–/7). Mettre à 0 pour désactiver. |
+| `BLOCKLIST_MIN_PREFIX` | `8` | Préfixe minimum accepté depuis les sources externes (protège contre un push `0.0.0.0/0`). Mettre à 0 pour désactiver. |
+| `MIN_ENTRIES` | `1000` | Seuil minimum d'entrées (anti-purge) |
 | `BASE_HASHSIZE` | `16384` | Hashsize de base pour ipset |
 | `BASE_MAXELEM` | `300000` | Maxelem de base pour ipset |
-| `LOG_LIMIT` | `60/min` | Rate-limit du logging des paquets bloqués (`N/sec`, `N/min`, `N/hour`, `N/day` ; vide = pas de limite) |
+| `LOG_LIMIT` | `60/min` | Rate-limit du logging des paquets bloqués (vide = pas de limite) |
 | `LOG_BURST` | `100` | Burst maximum avant que `LOG_LIMIT` s'applique |
-| `WAN_INTERFACE` | `""` (auto) | Interface WAN pour scoper la règle DOCKER-USER à l'entrée uniquement. Vide = auto-détection via `ip route get 8.8.8.8`. À définir explicitement sur VPN/multi-homé. |
-| `PERSIST_IPSET` | `1` | Sauvegarde les ipsets ipshield après chaque run réussi pour restauration au boot (`0` désactive). |
+| `WAN_INTERFACE` | `""` (auto) | Interface WAN pour scoper DOCKER-USER. Vide = auto via `ip route get 8.8.8.8`. |
+| `PERSIST_IPSET` | `1` | Sauvegarde les ipsets ipshield après chaque run réussi pour restauration au boot. |
 | `IPSET_SAVE_FILE` | `/var/lib/ipshield/ipset.save` | Chemin vers le fichier de sauvegarde ipset. |
-| `LOOKUP_CACHE_TTL` | `21600` | TTL du cache en secondes pour les téléchargements de `lookup-ip.sh` (`0` désactive). |
+| `LOOKUP_CACHE_TTL` | `21600` | TTL du cache en secondes pour `lookup-ip.sh` (`0` désactive). |
 
-Toutes les variables sont documentées inline dans `update-blocklist.conf.example` (le fichier copié dans `/etc/`).
+Toutes les variables sont documentées inline dans `update-blocklist.conf.example`.
 
 ### Utilisation
 
@@ -459,9 +372,7 @@ sudo ./update-blocklist.sh --verbose
 ./lookup-ip.sh 185.199.108.133
 ```
 
-`lookup-ip.sh` met les téléchargements en cache dans `/var/cache/ipshield/lookup/` (root) ou `${XDG_CACHE_HOME:-$HOME/.cache}/ipshield/lookup/` (utilisateur), un fichier par URL nommé `<sha256(URL)>.txt`. Les fichiers plus vieux que `LOOKUP_CACHE_TTL` sont rafraîchis atomiquement ; les orphelins (URL retirées) sont purgés à chaque run. Pour un bypass ponctuel : `LOOKUP_CACHE_TTL=0 ./lookup-ip.sh <ip>`.
-
-`update-blocklist.sh` fonctionne seul (sans `setup-firewall.sh`) — il auto-détecte le firewall en place.
+`lookup-ip.sh` met les téléchargements en cache dans `/var/cache/ipshield/lookup/` pendant `LOOKUP_CACHE_TTL` secondes (défaut 6 h ; `LOOKUP_CACHE_TTL=0` désactive). `update-blocklist.sh` fonctionne seul — il auto-détecte le firewall en place.
 
 ### Whitelist
 
@@ -477,9 +388,9 @@ WHITELIST=(
 
 Au prochain run, `update-blocklist.sh` crée `${SET_NAME}-allow` via swap atomique et insère une règle `ACCEPT` en position 1 sur `INPUT` (et `DOCKER-USER` si présent, scopé à l'interface WAN). Vider `WHITELIST` ensuite retire la règle et l'ipset au prochain run.
 
-> **Attention** : la règle ACCEPT contourne **l'ensemble du filtrage firewall**, pas seulement la blocklist. Une IP whitelistée a un accès complet au serveur, indépendamment des autres règles.
+> **Attention** : la règle ACCEPT contourne **l'ensemble du filtrage firewall**, pas seulement la blocklist. Une IP whitelistée a un accès complet au serveur.
 
-> **Garde-fou anti-typo** : par défaut, tout préfixe `< /8` est refusé (`WHITELIST_MIN_PREFIX=8`). Bloque le piège classique d'un `0.0.0.0/0` accidentel qui ouvrirait tout Internet. Pour autoriser un préfixe plus large, abaisser `WHITELIST_MIN_PREFIX` explicitement.
+> **Garde-fou anti-typo** : par défaut, tout préfixe `< /8` est refusé (`WHITELIST_MIN_PREFIX=8`). Bloque le piège classique d'un `0.0.0.0/0` accidentel. Abaisser `WHITELIST_MIN_PREFIX` explicitement pour autoriser un préfixe plus large.
 
 ### Scripts
 
@@ -506,43 +417,17 @@ Au prochain run, `update-blocklist.sh` crée `${SET_NAME}-allow` via swap atomiq
 | [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Nœuds de sortie Tor |
 | [Internet Scanner IPs](https://github.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs) | Ranges /24 agrégés de scanners Internet connus (Shodan, Censys, ONYPHE, GreyNoise, etc.) |
 
-Sources personnalisables via la variable `URLS` dans `/etc/update-blocklist.conf`.
+Personnalisable via la variable `URLS` dans `/etc/update-blocklist.conf`.
 
 ### Logs
 
-Les quatre chemins firewall loguent les paquets bloqués via le noyau (netfilter) avec le préfixe `BLOCKED: `, donc un seul filtre rsyslog capture tout.
+Les quatre chemins firewall loguent via le noyau (netfilter) avec le préfixe `BLOCKED: `, donc un seul filtre rsyslog capture tout. `setup-firewall.sh` écrit le filtre dans `/etc/rsyslog.d/30-blocked-ips.conf` (redirige `BLOCKED: ` vers `/var/log/blocked-ips.log` et strippe le champ `MAC=` superflu) et deux configs logrotate dans `/etc/logrotate.d/{update-blocklist,blocked-ips}` (weekly, rotate 4).
 
-| Firewall | Mécanisme de log |
-|---|---|
-| iptables | `-j LOG --log-prefix "BLOCKED: "` → kernel log → syslog |
-| nftables | via `iptables-nft` : `-j LOG --log-prefix "BLOCKED: "` → kernel log → syslog |
-| firewalld | direct rules avec `-j LOG` (même mécanisme) → kernel log → syslog |
-| ufw | `before.rules` avec `-j LOG` (même mécanisme) → kernel log → syslog |
-
-`setup-firewall.sh` installe le filtre rsyslog dans `/etc/rsyslog.d/30-blocked-ips.conf` (redirige `BLOCKED: ` vers `/var/log/blocked-ips.log` et strippe le champ `MAC=<14 octets>`, qui ne porte aucune information utile — ipshield bloque par IP jamais par MAC, et le filtre bogons garantit que l'IP source n'est jamais sur le même L2). Deux configs logrotate sont installées dans `/etc/logrotate.d/update-blocklist` et `/etc/logrotate.d/blocked-ips` (weekly, rotate 4, avec le hook postrotate portable `rsyslog-rotate`).
-
-Défauts du rate-limit : `LOG_LIMIT="60/min"` + `LOG_BURST=100`. Sous attaque massive, tous les paquets sont toujours bloqués mais seul un échantillon apparaît dans les logs. Mettre `LOG_LIMIT=""` pour tout loguer (risque de flood sous attaque) ou augmenter les deux valeurs pour plus de visibilité. Le drift est auto-détecté — relancer `update-blocklist.sh` après édition de la config pour rafraîchir les règles.
-
-La sortie propre du timer (stdout/stderr de `update-blocklist.sh`) est appendée à `/var/log/update-blocklist.log` et dupliquée dans journald : `journalctl -u ipshield.service` (ajouter `-f` pour suivre, `-S "1 hour ago"` pour borner dans le temps). `systemctl list-timers ipshield.timer` affiche le prochain déclenchement.
-
-### Persistance au boot et fast attach
-
-L'`ipset blacklist` vit en RAM, et les règles LOG/DROP qui le référencent ne persistent pas. Sans mécanisme de boot dédié, l'hôte serait fail-open pendant les 30+ premières secondes après chaque reboot. ipshield fournit deux unit systemd qui ferment la fenêtre à moins de deux secondes :
-
-1. **`ipshield-restore.service`** — oneshot early-boot, ordonné `Before=netfilter-persistent.service nftables.service ufw.service firewalld.service`. Exécute `ipset restore -! -f $IPSET_SAVE_FILE`. Indispensable pour `ufw`/`firewalld` sur `iptables-nft`, qui échouent à démarrer si leurs règles persistantes référencent un ipset absent.
-2. **`ipshield-apply.service`** — exécute `update-blocklist.sh --apply-only`, ordonné `After=ipshield-restore.service nftables.service docker.service`. L'ordering Docker est opportuniste (aucun `Wants=`/`Requires=`) donc sur une machine sans Docker l'unit démarre dès que les autres contraintes sont satisfaites. Saute le cycle download/parse/swap et attache simplement les règles LOG/DROP (et DOCKER-USER quand applicable) à l'ipset restauré. Fallback sur un update complet si la sauvegarde ipset est absente ou vide — l'hôte n'est jamais laissé sans protection.
-
-`update-blocklist.sh` sauvegarde les sets ipshield (`SET_NAME` et `WHITELIST_SET_NAME` quand présent) après chaque run réussi quand `PERSIST_IPSET=1` (défaut), alimentant les deux unit. Le déclenchement `OnBootSec=2min` du timer rafraîchit ensuite la blocklist depuis le réseau peu après le boot.
+Défauts du rate-limit : `LOG_LIMIT="60/min"` + `LOG_BURST=100`. Les paquets sont toujours bloqués ; seul un échantillon est logué sous charge. Ajuster les deux, ou mettre `LOG_LIMIT=""` pour tout loguer. La sortie du timer va dans `journalctl -u ipshield.service` et `/var/log/update-blocklist.log`.
 
 ### Support Docker
 
-Le trafic destiné aux conteneurs (ports publiés via `-p` / `ports:`) passe par `FORWARD`, pas `INPUT`. ipshield détecte Docker automatiquement via la chaîne `DOCKER-USER` et applique les mêmes règles LOG + DROP, **scopées à `-i $WAN_INTERFACE`** pour ne filtrer que l'entrée Internet — l'egress des conteneurs (`IN=br-xxx`) n'est jamais touché. Les bogons sont rejetés en amont, donc le LAN et le bridge Docker ne sont jamais blacklistés.
-
-Les règles blocklist sont scopées à `conntrack --ctstate NEW` : les réponses aux connexions sortantes déjà suivies comme `ESTABLISHED` ne sont pas droppées même si l'endpoint distant figure dans une blocklist publique.
-
-Avec **firewalld**, `INPUT` utilise des règles directes permanentes mais `DOCKER-USER` reste runtime-only. Stocker ces règles en permanent ferait échouer firewalld au démarrage/reload si Docker n'a pas encore créé la chaîne. Toute règle Docker permanente résiduelle d'une ancienne version d'ipshield est nettoyée avant l'application de la règle runtime.
-
-Docker recrée `DOCKER-USER` à chaque restart du daemon, donc les règles ne persistent pas — `ipshield-apply.service` au boot et `ipshield.timer` (`OnBootSec=2min` + cadence 8 h) les réappliquent idempotemment. Si l'auto-détection de `WAN_INTERFACE` se trompe (VPN/multi-homé), définir la variable explicitement dans `/etc/update-blocklist.conf`.
+Auto-détecté via la chaîne `DOCKER-USER`. Les règles LOG + DROP sont scopées à `-i $WAN_INTERFACE` pour ne filtrer que le trafic entrant depuis Internet — l'egress des conteneurs n'est pas touché. `ctstate NEW` empêche le drop des réponses à des connexions sortantes déjà établies. Si l'auto-détection WAN se trompe (VPN/multi-homé), définir `WAN_INTERFACE` explicitement dans `/etc/update-blocklist.conf`.
 
 ### Désinstallation
 
@@ -554,14 +439,7 @@ sudo ./uninstall.sh
 sudo ./uninstall.sh --apply
 ```
 
-`--apply` retire les règles ipshield (LOG/DROP blocklist + ACCEPT whitelist), détruit les ipsets associés, nettoie les lignes ipshield/orphelines de `/etc/ufw/before.rules` ligne par ligne, et retire les composants project-owned sans prompt supplémentaire : `ipshield-restore.service`, `ipshield-apply.service`, `ipshield.timer` + `ipshield.service`, `ipshield-safe-ports.service`, le drop-in `nftables.service` (et la restauration de `/etc/nftables.conf` depuis `.ipshield.bak`), ainsi que `/etc/rsyslog.d/30-blocked-ips.conf` + `/etc/logrotate.d/{update-blocklist,blocked-ips}` (rsyslog est redémarré si le filtre est retiré).
-
-Deux prompts proposent ensuite de retirer les données éditables par l'utilisateur :
-
-1. `/etc/update-blocklist.conf`, le fichier de persistance ipset, le cache LKG (`/var/lib/ipshield/sources/`), et le cache root de `lookup-ip.sh` (`/var/cache/ipshield/lookup/`).
-2. les fichiers de logs ipshield (`/var/log/update-blocklist.log*` et `/var/log/blocked-ips.log*`, y compris les fichiers rotatés/compressés).
-
-`uninstall.sh` ne désinstalle **pas** le firewall ni aucun paquet. Les entrées journald ne sont pas purgées (le vacuum du journal est une opération système globale).
+`--apply` retire les règles ipshield, les ipsets et les composants project-owned (timer, services, filtre rsyslog, logrotate, drop-in `nftables.service`, lignes dans `before.rules`) sans prompt supplémentaire, puis demande séparément si retirer `/etc/update-blocklist.conf`, les caches et les fichiers de logs. Le firewall et les paquets ne sont jamais désinstallés.
 
 ### Règles firewall manuelles (avancé)
 

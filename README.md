@@ -4,8 +4,6 @@
 
 *Automatic malicious IP blocking via ipset & Linux firewall*
 
-**Current release: v1.1.0**
-
 **[🇬🇧 English](#english) · [🇫🇷 Français](#français)**
 
 </div>

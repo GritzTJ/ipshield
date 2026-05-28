@@ -1,16 +1,16 @@
 #!/bin/bash
-# ipshield v1.1.0
+# ipshield v1.2.0
 set -euo pipefail
 umask 077
 
 # Ensure /sbin and /usr/sbin are in PATH (ipset, iptables, ufw, firewall-cmd,
-# nft live there on Debian/Ubuntu). Same rationale as update-blocklist.sh.
+# nft live there on Debian/Ubuntu). Same rationale as update-ipshield.sh.
 export PATH="/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin${PATH:+:$PATH}"
 
 # --- Usage / help ---
 usage() {
   cat <<'EOF'
-Usage: uninstall.sh [OPTIONS]
+Usage: uninstall-ipshield.sh [OPTIONS]
 
 Removes ipshield blocking rules and destroys the associated ipsets.
 Defaults to dry-run mode (shows what would be done, without modifying
@@ -18,7 +18,7 @@ anything).
 
 Options:
   --apply             Actually apply the uninstall (otherwise dry-run).
-  -c, --config FILE   Configuration file path (default: /etc/update-blocklist.conf).
+  -c, --config FILE   Configuration file path (default: /etc/ipshield.conf).
   -h, --help          Show this help.
 
 This script:
@@ -30,10 +30,10 @@ This script:
     ipshield-apply.service, ipshield-safe-ports.service, the
     nftables.service drop-in, and the safe-ports configuration files;
   - restores /etc/nftables.conf from its .ipshield.bak backup when present;
-  - removes the rsyslog filter (30-blocked-ips.conf) and logrotate configs;
-  - optionally removes /etc/update-blocklist.conf and the ipset save file
+  - removes the rsyslog filter (30-ipshield.conf) and logrotate configs;
+  - optionally removes /etc/ipshield.conf and the ipset save file
     (separate prompt -- user-editable data);
-  - optionally removes /var/log/update-blocklist.log + /var/log/blocked-ips.log
+  - optionally removes /var/log/ipshield-update.log + /var/log/ipshield.log
     and their rotated copies (separate prompt -- historical data).
 
 It does NOT uninstall the firewall or any packages (ipset, iptables, etc.).
@@ -49,7 +49,7 @@ fi
 
 # --- CLI parsing ---
 APPLY=0
-CONF_FILE="/etc/update-blocklist.conf"
+CONF_FILE="/etc/ipshield.conf"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -65,7 +65,7 @@ done
 # --- Defaults ---
 SET_NAME="blacklist"
 
-# --- Source config (same checks as update-blocklist.sh) ---
+# --- Source config (same checks as update-ipshield.sh) ---
 if [ -f "$CONF_FILE" ]; then
   conf_owner="$(stat -c '%u' "$CONF_FILE")"
   conf_perms="$(stat -c '%a' "$CONF_FILE")"
@@ -109,8 +109,8 @@ fi
 # match it verbatim here rather than expose a knob no one will tune.
 LOOKUP_CACHE_DIR="/var/cache/ipshield/lookup"
 
-# --- Lock shared with update-blocklist.sh (anti-race against ipshield.timer) ---
-# Without this lock, a scheduled update-blocklist.sh run could re-create the rules
+# --- Lock shared with update-ipshield.sh (anti-race against ipshield.timer) ---
+# Without this lock, a scheduled update-ipshield.sh run could re-create the rules
 # between uninstall removing them and destroying the ipsets, leaving a
 # partially-installed state.
 LOCK_DIR="/run/lock"
@@ -118,7 +118,7 @@ LOCK_FILE="${LOCK_DIR}/${SET_NAME}.lock"
 mkdir -p "$LOCK_DIR"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
-  echo "Error: update-blocklist.sh is already running; retry in a few seconds." >&2
+  echo "Error: update-ipshield.sh is already running; retry in a few seconds." >&2
   exit 1
 fi
 
@@ -413,7 +413,7 @@ done
 
 echo ""
 log "${PREFIX}--- rsyslog + logrotate configs ---"
-log_configs_list=(/etc/rsyslog.d/30-blocked-ips.conf /etc/logrotate.d/update-blocklist /etc/logrotate.d/blocked-ips)
+log_configs_list=(/etc/rsyslog.d/30-ipshield.conf /etc/logrotate.d/ipshield-update /etc/logrotate.d/ipshield)
 log_configs_found=0
 for f in "${log_configs_list[@]}"; do
   if [ -f "$f" ]; then
@@ -430,7 +430,7 @@ fi
 echo ""
 log "${PREFIX}--- log files ---"
 log_files=()
-for pattern in /var/log/update-blocklist.log* /var/log/blocked-ips.log*; do
+for pattern in /var/log/ipshield-update.log* /var/log/ipshield.log*; do
   for f in $pattern; do
     [ -e "$f" ] && log_files+=("$f")
   done
@@ -795,7 +795,7 @@ if [ "${#data_files[@]}" -gt 0 ] || [ "$source_cache_present" -eq 1 ] || [ "$loo
 fi
 
 # --- rsyslog + logrotate config removal (auto) ---
-log_configs=(/etc/rsyslog.d/30-blocked-ips.conf /etc/logrotate.d/update-blocklist /etc/logrotate.d/blocked-ips)
+log_configs=(/etc/rsyslog.d/30-ipshield.conf /etc/logrotate.d/ipshield-update /etc/logrotate.d/ipshield)
 present_log_configs=()
 for f in "${log_configs[@]}"; do
   [ -f "$f" ] && present_log_configs+=("$f")

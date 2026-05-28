@@ -1,5 +1,5 @@
 #!/bin/bash
-# ipshield v1.1.0
+# ipshield v1.2.0
 set -euo pipefail
 umask 077
 export LC_ALL=C
@@ -14,7 +14,7 @@ export PATH="/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin${PATH:
 # --- Usage / help ---
 usage() {
   cat <<'EOF'
-Usage: update-blocklist.sh [OPTIONS]
+Usage: update-ipshield.sh [OPTIONS]
 
 Update a blocking ipset from public lists, then detect the active
 firewall and apply the blocking rules.
@@ -45,7 +45,7 @@ fi
 CLI_DRY_RUN=""
 CLI_VERBOSE=""
 CLI_APPLY_ONLY=""
-CONF_FILE="/etc/update-blocklist.conf"
+CONF_FILE="/etc/ipshield.conf"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -68,12 +68,12 @@ VERBOSE=0
 WAN_INTERFACE=""
 
 # --- Source config file (REQUIRED) ---
-# The conf file is the single source of truth. setup-firewall.sh copies it
-# from update-blocklist.conf.example when missing.
+# The conf file is the single source of truth. setup-ipshield.sh copies it
+# from ipshield.conf.example when missing.
 if [ ! -f "$CONF_FILE" ]; then
   echo "Error: configuration file $CONF_FILE not found." >&2
-  echo "Run ./setup-firewall.sh to install it, or manually copy" >&2
-  echo "update-blocklist.conf.example to $CONF_FILE." >&2
+  echo "Run ./setup-ipshield.sh to install it, or manually copy" >&2
+  echo "ipshield.conf.example to $CONF_FILE." >&2
   exit 1
 fi
 conf_owner="$(stat -c '%u' "$CONF_FILE")"
@@ -158,7 +158,7 @@ fi
 
 # --- LOOKUP_CACHE_TTL validation ---
 # The variable is consumed by lookup-ip.sh, but this script sources the same
-# config file. Validate it here too so typos in /etc/update-blocklist.conf are
+# config file. Validate it here too so typos in /etc/ipshield.conf are
 # caught during the regular scheduled run.
 : "${LOOKUP_CACHE_TTL:=21600}"
 if ! [[ "$LOOKUP_CACHE_TTL" =~ ^[0-9]+$ ]]; then
@@ -258,8 +258,8 @@ if [ "${#WL_TEMP_SET}" -gt 31 ]; then
 fi
 
 # --- Functions ---
-log() { echo "$*"; logger -t "update-blocklist" "$*" 2>/dev/null || true; }
-err() { echo "$*" >&2; logger -t "update-blocklist" -p user.err "$*" 2>/dev/null || true; }
+log() { echo "$*"; logger -t "ipshield-update" "$*" 2>/dev/null || true; }
+err() { echo "$*" >&2; logger -t "ipshield-update" -p user.err "$*" 2>/dev/null || true; }
 fmt_num() { printf "%d" "$1" | sed ':a;s/\([0-9]\)\([0-9]\{3\}\)\($\| \)/\1 \2\3/;ta'; }
 
 cleanup() {
@@ -325,9 +325,9 @@ detect_firewall() {
     fi
     # ufw service inactive but legacy ufw-* chains still present alongside
     # direct iptables rules. Refuse to apply iptables rules silently: the
-    # operator should disable ufw cleanly or rerun setup-firewall.sh.
+    # operator should disable ufw cleanly or rerun setup-ipshield.sh.
     err "Warning: iptables rules detected but ufw-* chains remain; refusing to apply rules to avoid drift."
-    err "  Run setup-firewall.sh to disable the inactive ufw service or pick a coherent backend."
+    err "  Run setup-ipshield.sh to disable the inactive ufw service or pick a coherent backend."
   fi
 
   echo "none"
@@ -352,7 +352,7 @@ require_iptables_nft_backend() {
   if ! iptables -V 2>/dev/null | grep -q "(nf_tables)"; then
     err "Error: nftables mode requires the iptables-nft backend."
     err "  Current backend: $(iptables -V 2>/dev/null || echo unknown)"
-    err "  Run setup-firewall.sh with nftables selected while Docker is stopped if a backend switch is needed."
+    err "  Run setup-ipshield.sh with nftables selected while Docker is stopped if a backend switch is needed."
     return 1
   fi
 }
@@ -1037,7 +1037,7 @@ if [ "$APPLY_ONLY" -eq 1 ]; then
     DETECTED_FW="$(detect_firewall)"
     if [ "$DETECTED_FW" = "none" ]; then
       err "No firewall detected. The ipset is loaded but no blocking rule was applied."
-      err "Run setup-firewall.sh to install a firewall, or install one manually."
+      err "Run setup-ipshield.sh to install a firewall, or install one manually."
       exit 1
     fi
     if detect_docker; then
@@ -1471,7 +1471,7 @@ if [ "$DETECTED_FW" != "none" ]; then
   apply_firewall_rules "$DETECTED_FW"
 else
   err "No firewall detected. IPs are in the ipset but no blocking rule is active."
-  err "Run setup-firewall.sh to install a firewall, or install one manually."
+  err "Run setup-ipshield.sh to install a firewall, or install one manually."
 fi
 
 # --- Empty whitelist: destroy the set after rules have been removed ---

@@ -1,5 +1,5 @@
 #!/bin/bash
-# ipshield v1.1.0
+# ipshield v1.2.0
 set -euo pipefail
 umask 077
 
@@ -35,7 +35,7 @@ EOF
 
 # --- CLI parsing ---
 CLI_VERBOSE=""
-CONF_FILE="/etc/update-blocklist.conf"
+CONF_FILE="/etc/ipshield.conf"
 TARGET_IP=""
 
 while [ $# -gt 0 ]; do
@@ -66,13 +66,13 @@ URLS=()
 VERBOSE=0
 
 # --- Source config file (REQUIRED, except if not readable by a non-root user) ---
-# The conf file (same content as update-blocklist.sh) is the single source of truth.
+# The conf file (same content as update-ipshield.sh) is the single source of truth.
 # For diagnostic use from a machine without ipshield installed, point -c to a copy
-# of update-blocklist.conf.example.
+# of ipshield.conf.example.
 if [ ! -f "$CONF_FILE" ]; then
   echo "Error: configuration file $CONF_FILE not found." >&2
-  echo "Run ./setup-firewall.sh to install it, or point -c to a copy of" >&2
-  echo "update-blocklist.conf.example." >&2
+  echo "Run ./setup-ipshield.sh to install it, or point -c to a copy of" >&2
+  echo "ipshield.conf.example." >&2
   exit 1
 fi
 if [ "$(id -u)" -eq 0 ]; then
@@ -130,7 +130,7 @@ if [ "$WHITELIST_SET_NAME" = "$SET_NAME" ]; then
 fi
 
 # --- BLOCKLIST_MIN_PREFIX default + validation ---
-# Same safeguard as update-blocklist.sh: an external CIDR with prefix shorter
+# Same safeguard as update-ipshield.sh: an external CIDR with prefix shorter
 # than this threshold would never end up in the ipset, so don't report it as a
 # match here either. Default 8 (rejects /0 to /7).
 : "${BLOCKLIST_MIN_PREFIX:=8}"
@@ -229,7 +229,7 @@ if [ "$LOOKUP_CACHE_TTL" -gt 0 ]; then
 fi
 
 # Prune orphan cache files left behind when a URL is removed/edited in the
-# config (same scheme as update-blocklist.sh). Files whose basename does not
+# config (same scheme as update-ipshield.sh). Files whose basename does not
 # match any current URL hash are deleted. This also cleans up the legacy
 # 'source-<idx>-<cksum>.txt' naming inherited from earlier versions.
 if [ -n "$LOOKUP_CACHE_DIR" ] && [ -d "$LOOKUP_CACHE_DIR" ]; then
@@ -249,7 +249,7 @@ if [ -n "$LOOKUP_CACHE_DIR" ] && [ -d "$LOOKUP_CACHE_DIR" ]; then
   shopt -u nullglob
 fi
 
-# --- AWK program: extraction + IPv4/CIDR validation (same as update-blocklist.sh) ---
+# --- AWK program: extraction + IPv4/CIDR validation (same as update-ipshield.sh) ---
 AWK_PROG='
 function valid_ipv4(ip,   n,i,o) {
   n = split(ip, o, ".");
@@ -351,7 +351,7 @@ echo ""
 echo "--- ipset status ---"
 if [ "$(id -u)" -eq 0 ] && command -v ipset >/dev/null 2>&1; then
   if ! ipset list -n 2>/dev/null | awk -v s="$SET_NAME" '$0==s{found=1} END{exit(found?0:1)}'; then
-    echo "  Set '$SET_NAME': not found (run update-blocklist.sh first)"
+    echo "  Set '$SET_NAME': not found (run update-ipshield.sh first)"
   elif ipset test "$SET_NAME" "$TARGET_IP" 2>/dev/null; then
     echo "  Set '$SET_NAME': IP PRESENT (block active)"
   else

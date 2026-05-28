@@ -1,17 +1,17 @@
 #!/bin/bash
-# ipshield v1.1.0
+# ipshield v1.2.0
 set -euo pipefail
 umask 077
 
 # Ensure /sbin and /usr/sbin are in PATH (firewall-cmd, ufw, iptables, nft,
-# ipset, ip live there on Debian/Ubuntu). Same rationale as update-blocklist.sh.
+# ipset, ip live there on Debian/Ubuntu). Same rationale as update-ipshield.sh.
 export PATH="/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin${PATH:+:$PATH}"
 
 # --- Usage / help ---
 case "${1:-}" in
   -h|--help)
     cat <<'EOF'
-Usage: setup-firewall.sh
+Usage: setup-ipshield.sh
 
 Interactive script that installs and configures a firewall.
 Detects the active firewall, offers a choice among iptables, nftables,
@@ -239,7 +239,7 @@ prepare_docker_firewall_transition() {
       docker ps --format '  - {{.Names}} ({{.Status}})' 2>/dev/null | sed -n '1,20p' || true
       log ""
       log "Preferred production path: stop application containers cleanly first"
-      log "(for example: docker compose down), then rerun setup-firewall.sh."
+      log "(for example: docker compose down), then rerun setup-ipshield.sh."
       log "Letting this setup stop Docker only stops the Docker daemon; it is not"
       log "equivalent to a clean application/Compose shutdown."
     elif [ "$running_count" = "unknown" ]; then
@@ -253,7 +253,7 @@ prepare_docker_firewall_transition() {
     fi
     if [ "$live_restore" = "true" ] && [[ "$running_count" =~ ^[0-9]+$ ]] && [ "$running_count" -gt 0 ]; then
       err "Docker live-restore is enabled and containers are running."
-      err "Stop the containers first, then rerun setup-firewall.sh."
+      err "Stop the containers first, then rerun setup-ipshield.sh."
       exit 1
     fi
 
@@ -275,7 +275,7 @@ prepare_docker_firewall_transition() {
 
   if docker_iptables_chains_present; then
     err "Docker firewall chains are still present after cleanup."
-    err "Stop Docker containers manually or reboot during a maintenance window, then rerun setup-firewall.sh."
+    err "Stop Docker containers manually or reboot during a maintenance window, then rerun setup-ipshield.sh."
     restart_docker_after_firewall_transition || true
     exit 1
   fi
@@ -371,11 +371,11 @@ detect_firewall() {
 
 DETECTED="$(detect_firewall)"
 
-# Resolve the path to update-blocklist.sh used by the systemd units.
+# Resolve the path to update-ipshield.sh used by the systemd units.
 # Source of truth, in order:
 #  1) An existing ipshield.service unit file.
 #  2) An existing ipshield-apply.service unit file.
-#  3) Same directory as setup-firewall.sh (the typical fresh install layout).
+#  3) Same directory as setup-ipshield.sh (the typical fresh install layout).
 # Returns the resolved path on stdout (empty string if none of the
 # candidates points to an executable file).
 detect_update_script_path() {
@@ -391,7 +391,7 @@ detect_update_script_path() {
     fi
   done
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  candidate="$script_dir/update-blocklist.sh"
+  candidate="$script_dir/update-ipshield.sh"
   if [ -x "$candidate" ]; then
     echo "$candidate"
     return 0
@@ -418,7 +418,7 @@ configure_timer() {
 
   script_path="$(detect_update_script_path)"
   if [ -z "$script_path" ] || [ ! -x "$script_path" ]; then
-    err "Cannot locate an executable update-blocklist.sh. Timer not configured."
+    err "Cannot locate an executable update-ipshield.sh. Timer not configured."
     return 0
   fi
 
@@ -430,8 +430,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=$script_path
-StandardOutput=append:/var/log/update-blocklist.log
-StandardError=append:/var/log/update-blocklist.log"
+StandardOutput=append:/var/log/ipshield-update.log
+StandardError=append:/var/log/ipshield-update.log"
 
   local timer_content="[Unit]
 Description=ipshield blocklist refresh schedule
@@ -518,7 +518,7 @@ validate_root_config_file() {
 cleanup_ufw_ipshield_before_rules_for_transition() {
   local rules_path="/etc/ufw/before.rules"
   local snapshot="/etc/ufw/before.rules.ipshield-transition.bak"
-  local conf_path="/etc/update-blocklist.conf"
+  local conf_path="/etc/ipshield.conf"
   local set_name="blacklist"
   local whitelist_set_name="blacklist-allow"
   local ref_set before_count after_count
@@ -563,25 +563,25 @@ cleanup_ufw_ipshield_before_rules_for_transition() {
 }
 
 # --- Configuration file installation ---
-# /etc/update-blocklist.conf is required by update-blocklist.sh. Copied from
-# update-blocklist.conf.example when missing. If present, kept as-is to
+# /etc/ipshield.conf is required by update-ipshield.sh. Copied from
+# ipshield.conf.example when missing. If present, kept as-is to
 # preserve user modifications.
 configure_conf() {
-  local conf_path="/etc/update-blocklist.conf"
+  local conf_path="/etc/ipshield.conf"
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local example="$script_dir/update-blocklist.conf.example"
+  local example="$script_dir/ipshield.conf.example"
 
   echo ""
   if [ -f "$conf_path" ]; then
     log "Configuration $conf_path: already present, kept as-is."
-    log "  To reset from the example: sudo rm $conf_path && re-run setup-firewall.sh."
+    log "  To reset from the example: sudo rm $conf_path && re-run setup-ipshield.sh."
     return 0
   fi
 
   if [ ! -f "$example" ]; then
     err "$example not found. Cannot initialise $conf_path."
-    err "  Copy the file manually from the repo, then re-run setup-firewall.sh."
+    err "  Copy the file manually from the repo, then re-run setup-ipshield.sh."
     return 1
   fi
 
@@ -594,7 +594,7 @@ configure_conf() {
 
 # --- ipset persistence service ---
 configure_ipset_restore() {
-  local conf_path="/etc/update-blocklist.conf"
+  local conf_path="/etc/ipshield.conf"
   local persist=1
   local save_file="/var/lib/ipshield/ipset.save"
 
@@ -615,7 +615,7 @@ configure_ipset_restore() {
     log "ipset persistence disabled by PERSIST_IPSET=0."
     # Si un install precedent avait PERSIST_IPSET=1, le service est encore
     # enabled et chargerait au boot un ipset.save qui ne sera plus rafraichi
-    # par update-blocklist.sh. On le retire ici pour rester coherent.
+    # par update-ipshield.sh. On le retire ici pour rester coherent.
     local stale_service="/etc/systemd/system/ipshield-restore.service"
     if [ -f "$stale_service" ]; then
       log "Removing stale ipshield-restore.service (PERSIST_IPSET=0)..."
@@ -648,7 +648,7 @@ configure_ipset_restore() {
   chmod 700 "$save_dir"
 
   # Pre-create the per-source LKG cache dir under the same root so
-  # update-blocklist.sh can write atomically on its first run.
+  # update-ipshield.sh can write atomically on its first run.
   source_cache_dir="${SOURCE_CACHE_DIR:-/var/lib/ipshield/sources}"
   if [[ "$source_cache_dir" == /* ]] && [[ "$source_cache_dir" != *[[:space:]]* ]]; then
     mkdir -p "$source_cache_dir"
@@ -681,19 +681,19 @@ WantedBy=sysinit.target"
 
   systemctl daemon-reload
   systemctl enable ipshield-restore.service
-  log "ipset restore service enabled. The save file will be written by update-blocklist.sh after a successful run."
+  log "ipset restore service enabled. The save file will be written by update-ipshield.sh after a successful run."
 }
 
 # --- ipshield-apply.service: attach firewall rules to the restored ipset ---
-# Replaces the historical 'cron @reboot sleep 60 && update-blocklist.sh'
+# Replaces the historical 'cron @reboot sleep 60 && update-ipshield.sh'
 # trick which left a ~70s window where Docker was up but the blocklist was
 # not yet applied. The unit runs After=docker.service so DOCKER-USER exists
-# when update-blocklist.sh --apply-only inspects it; the apply-only fast
+# when update-ipshield.sh --apply-only inspects it; the apply-only fast
 # path skips the download and just attaches LOG/DROP rules to the ipset
 # already loaded by ipshield-restore.service. Falls back to a full update
 # if the ipset is missing or empty (e.g. PERSIST_IPSET=0).
 configure_apply_service() {
-  local conf_path="/etc/update-blocklist.conf"
+  local conf_path="/etc/ipshield.conf"
   local service_path="/etc/systemd/system/ipshield-apply.service"
   local script_path
 
@@ -702,7 +702,7 @@ configure_apply_service() {
 
   script_path="$(detect_update_script_path)"
   if [ -z "$script_path" ] || [ ! -x "$script_path" ]; then
-    err "Cannot locate an executable update-blocklist.sh. ipshield-apply.service not configured."
+    err "Cannot locate an executable update-ipshield.sh. ipshield-apply.service not configured."
     return 0
   fi
 
@@ -716,8 +716,8 @@ ConditionPathExists=$conf_path
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=$script_path --apply-only
-StandardOutput=append:/var/log/update-blocklist.log
-StandardError=append:/var/log/update-blocklist.log
+StandardOutput=append:/var/log/ipshield-update.log
+StandardError=append:/var/log/ipshield-update.log
 
 [Install]
 WantedBy=multi-user.target"
@@ -751,7 +751,7 @@ configure_logs() {
   else
     # rsyslog absent: inform then propose install
     log "rsyslog is not active on this system."
-    log "  - With rsyslog : dedicated /var/log/blocked-ips.log file with rotation."
+    log "  - With rsyslog : dedicated /var/log/ipshield.log file with rotation."
     log "  - Without rsyslog: logs in journald, via 'journalctl -k --grep BLOCKED:'"
     echo ""
     if ask_yes_no "Install rsyslog and configure the filter + logrotate?" yes; then
@@ -771,7 +771,7 @@ configure_logs() {
         log "To view logs: journalctl -k --grep 'BLOCKED:'"
       fi
     else
-      # rsyslog declined: offer logrotate alone (useful for /var/log/update-blocklist.log)
+      # rsyslog declined: offer logrotate alone (useful for /var/log/ipshield-update.log)
       if ! ask_yes_no "Install logrotate alone anyway (without the rsyslog filter)?" yes; then
         log "Logs not configured. View blocked packets via:"
         log "  journalctl -k --grep 'BLOCKED:'"
@@ -793,7 +793,7 @@ if ($msg contains "BLOCKED: ") then {
   set $.pre  = re_extract($msg, "(.*) MAC=[0-9a-fA-F:]+(.*)", 0, 1, $msg);
   set $.post = re_extract($msg, "(.*) MAC=[0-9a-fA-F:]+(.*)", 0, 2, "");
   set $.cleanmsg = $.pre & $.post;
-  action(type="omfile" file="/var/log/blocked-ips.log" template="blockedFormat")
+  action(type="omfile" file="/var/log/ipshield.log" template="blockedFormat")
   stop
 }'
 
@@ -802,7 +802,7 @@ if ($msg contains "BLOCKED: ") then {
   # silently skipped on stricter setups. Standard pattern, also used by
   # /etc/logrotate.d/ubuntu-pro-client.
   local logrotate_app_content
-  logrotate_app_content='/var/log/update-blocklist.log {
+  logrotate_app_content='/var/log/ipshield-update.log {
 	su root root
 	create 0644 root root
 	rotate 4
@@ -814,7 +814,7 @@ if ($msg contains "BLOCKED: ") then {
 }'
 
   local logrotate_blocked_content
-  logrotate_blocked_content='/var/log/blocked-ips.log {
+  logrotate_blocked_content='/var/log/ipshield.log {
 	su root root
 	rotate 4
 	weekly
@@ -834,12 +834,12 @@ if ($msg contains "BLOCKED: ") then {
   local need_rsyslog_restart=0
 
   if [ "$has_rsyslog" -eq 1 ]; then
-    if _install_config /etc/rsyslog.d/30-blocked-ips.conf "$rsyslog_content" "rsyslog filter"; then
+    if _install_config /etc/rsyslog.d/30-ipshield.conf "$rsyslog_content" "rsyslog filter"; then
       need_rsyslog_restart=1
     fi
   fi
-  _install_config /etc/logrotate.d/update-blocklist "$logrotate_app_content" "Logrotate update-blocklist" || true
-  _install_config /etc/logrotate.d/blocked-ips "$logrotate_blocked_content" "Logrotate blocked-ips" || true
+  _install_config /etc/logrotate.d/ipshield-update "$logrotate_app_content" "Logrotate ipshield-update" || true
+  _install_config /etc/logrotate.d/ipshield "$logrotate_blocked_content" "Logrotate ipshield" || true
 
   if [ "$need_rsyslog_restart" -eq 1 ]; then
     if systemctl restart rsyslog 2>/dev/null; then
@@ -1102,7 +1102,7 @@ ensure_nftables_persistent_safe() {
 
   local dropin_dir=/etc/systemd/system/nftables.service.d
   local dropin_path="$dropin_dir/ipshield.conf"
-  local dropin_content="# Installed by ipshield (setup-firewall.sh).
+  local dropin_content="# Installed by ipshield (setup-ipshield.sh).
 # Clears the default ExecStop=/usr/sbin/nft flush ruleset which would
 # otherwise wipe the iptables-nft 'ip filter' table (holding ipshield's
 # blocklist LOG/DROP rules and any Docker rules) on every systemctl
@@ -1260,7 +1260,7 @@ configure_safe_ports() {
 _generate_safe_ports_nft() {
   local path="$1" ports="$2" entry p proto
   {
-    echo "# Generated by setup-firewall.sh -- regenerated on each rerun."
+    echo "# Generated by setup-ipshield.sh -- regenerated on each rerun."
     echo "table inet admin_access {"
     echo "    chain input {"
     echo "        type filter hook input priority 10; policy accept;"
@@ -1278,7 +1278,7 @@ _generate_safe_ports_nft() {
 _generate_safe_ports_v4() {
   local path="$1" ports="$2" entry p proto
   {
-    echo "# Generated by setup-firewall.sh -- regenerated on each rerun."
+    echo "# Generated by setup-ipshield.sh -- regenerated on each rerun."
     echo "*filter"
     for entry in $ports; do
       p="${entry%/*}"
@@ -1431,7 +1431,7 @@ if [ "$FIREWALL" = "$DETECTED" ]; then
   elif [ "$FIREWALL" = "nftables" ]; then
     ensure_iptables_backend nft
     # Retro-apply the flush ruleset patch on existing installs that
-    # predate this change (or that ran setup-firewall.sh before Docker
+    # predate this change (or that ran setup-ipshield.sh before Docker
     # was installed). Idempotent; no-op if already patched or absent.
     ensure_nftables_persistent_safe
   fi
@@ -1568,7 +1568,7 @@ if [ "$PKG_MANAGER" = "apt" ]; then
   apt update -qq
 fi
 # `ipset` and `curl` are installed alongside the firewall (dependencies of
-# update-blocklist.sh, often missing on minimal Debian).
+# update-ipshield.sh, often missing on minimal Debian).
 case "$FIREWALL" in
   iptables)
     if [ "$PKG_MANAGER" = "apt" ]; then

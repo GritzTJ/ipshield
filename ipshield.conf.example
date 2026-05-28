@@ -1,6 +1,6 @@
-# Configuration for update-blocklist.sh
-# Copy to /etc/update-blocklist.conf and adjust as needed.
-# setup-firewall.sh copies this file automatically when /etc/update-blocklist.conf
+# Configuration for ipshield
+# Copy to /etc/ipshield.conf and adjust as needed.
+# setup-ipshield.sh copies this file automatically when /etc/ipshield.conf
 # is missing.
 # Required permissions: owned by root, not group/world-writable.
 #

@@ -49,7 +49,7 @@ Validated end-to-end on each row: install, blocklist refresh, reboot restore, Do
 
 ### Prerequisites
 
-Root access. `setup-firewall.sh` installs missing packages automatically; the table below lists them for reference and manual setups.
+Root access. `setup-ipshield.sh` installs missing packages automatically; the table below lists them for reference and manual setups.
 
 | Tool | Package (Debian/Ubuntu) | Package (Fedora) |
 |---|---|---|
@@ -66,16 +66,16 @@ Root access. `setup-firewall.sh` installs missing packages automatically; the ta
 git clone https://github.com/GritzTJ/ipshield.git
 cd ipshield
 chmod 700 *.sh
-sudo ./setup-firewall.sh
+sudo ./setup-ipshield.sh
 ```
 
-`setup-firewall.sh` detects/installs the firewall, copies the config to `/etc/update-blocklist.conf`, and installs `ipshield.timer` + `ipshield.service` (8-hour refresh + `OnBootSec=2min`), `ipshield-restore.service` + `ipshield-apply.service` (close the boot exposure window to under two seconds), the rsyslog filter and the two logrotate configs. Idempotent — rerun to reconfigure.
+`setup-ipshield.sh` detects/installs the firewall, copies the config to `/etc/ipshield.conf`, and installs `ipshield.timer` + `ipshield.service` (8-hour refresh + `OnBootSec=2min`), `ipshield-restore.service` + `ipshield-apply.service` (close the boot exposure window to under two seconds), the rsyslog filter and the two logrotate configs. Idempotent — rerun to reconfigure.
 
 ipshield installs blocklist rules only; on direct `iptables`/`nftables`, non-blacklisted traffic stays accepted unless you harden the host separately.
 
 ### Configuration
 
-`/etc/update-blocklist.conf` is the single source of truth. `setup-firewall.sh` copies it from `update-blocklist.conf.example` (chmod 600, owner root) when missing; an existing file is left intact.
+`/etc/ipshield.conf` is the single source of truth. `setup-ipshield.sh` copies it from `ipshield.conf.example` (chmod 600, owner root) when missing; an existing file is left intact.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -95,12 +95,12 @@ ipshield installs blocklist rules only; on direct `iptables`/`nftables`, non-bla
 | `IPSET_SAVE_FILE` | `/var/lib/ipshield/ipset.save` | Path to the ipset save file. |
 | `LOOKUP_CACHE_TTL` | `21600` | Cache TTL in seconds for `lookup-ip.sh` (`0` disables). |
 
-All variables are documented inline in `update-blocklist.conf.example`.
+All variables are documented inline in `ipshield.conf.example`.
 
 ### Usage
 
 ```
-update-blocklist.sh [OPTIONS]
+update-ipshield.sh [OPTIONS]
 ```
 
 | Option | Description |
@@ -112,20 +112,20 @@ update-blocklist.sh [OPTIONS]
 
 ```bash
 # Dry run
-./update-blocklist.sh --dry-run --verbose
+./update-ipshield.sh --dry-run --verbose
 
 # Real refresh (also runs automatically via ipshield.timer)
-sudo ./update-blocklist.sh --verbose
+sudo ./update-ipshield.sh --verbose
 
 # Identify which sources list a blocked IP
 ./lookup-ip.sh 185.199.108.133
 ```
 
-`lookup-ip.sh` caches downloads in `/var/cache/ipshield/lookup/` for `LOOKUP_CACHE_TTL` seconds (default 6 h; `LOOKUP_CACHE_TTL=0` disables). `update-blocklist.sh` works standalone — it auto-detects the existing firewall.
+`lookup-ip.sh` caches downloads in `/var/cache/ipshield/lookup/` for `LOOKUP_CACHE_TTL` seconds (default 6 h; `LOOKUP_CACHE_TTL=0` disables). `update-ipshield.sh` works standalone — it auto-detects the existing firewall.
 
 ### Whitelist
 
-To let specific IPs/subnets bypass the blocklist (typically management hosts), set `WHITELIST` in `/etc/update-blocklist.conf`:
+To let specific IPs/subnets bypass the blocklist (typically management hosts), set `WHITELIST` in `/etc/ipshield.conf`:
 
 ```bash
 WHITELIST=(
@@ -135,7 +135,7 @@ WHITELIST=(
 )
 ```
 
-On the next run, `update-blocklist.sh` creates `${SET_NAME}-allow` via atomic swap and inserts an `ACCEPT` rule at position 1 on `INPUT` (and `DOCKER-USER` if present, scoped to the WAN interface). Emptying `WHITELIST` later removes both rule and ipset on the next run.
+On the next run, `update-ipshield.sh` creates `${SET_NAME}-allow` via atomic swap and inserts an `ACCEPT` rule at position 1 on `INPUT` (and `DOCKER-USER` if present, scoped to the WAN interface). Emptying `WHITELIST` later removes both rule and ipset on the next run.
 
 > **Warning**: the ACCEPT rule bypasses **the entire firewall**, not only the blocklist. A whitelisted IP has full server access regardless of other rules.
 
@@ -145,10 +145,10 @@ On the next run, `update-blocklist.sh` creates `${SET_NAME}-allow` via atomic sw
 
 | Script | Purpose |
 |---|---|
-| `update-blocklist.sh` | ipset update + firewall detection + blocking rules |
-| `setup-firewall.sh` | Interactive firewall installation + systemd timer + rsyslog/logrotate (idempotent) |
+| `update-ipshield.sh` | ipset update + firewall detection + blocking rules |
+| `setup-ipshield.sh` | Interactive firewall installation + systemd timer + rsyslog/logrotate (idempotent) |
 | `lookup-ip.sh` | Look up an IP across blocklist sources (diagnostic) |
-| `uninstall.sh` | Clean uninstall (dry-run by default, `--apply` to execute) |
+| `uninstall-ipshield.sh` | Clean uninstall (dry-run by default, `--apply` to execute) |
 
 ### Blocklist sources
 
@@ -166,34 +166,34 @@ On the next run, `update-blocklist.sh` creates `${SET_NAME}-allow` via atomic sw
 | [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Tor exit nodes |
 | [Internet Scanner IPs](https://github.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs) | Aggregated /24 ranges of known internet scanners (Shodan, Censys, ONYPHE, GreyNoise, etc.) |
 
-Customisable via the `URLS` variable in `/etc/update-blocklist.conf`.
+Customisable via the `URLS` variable in `/etc/ipshield.conf`.
 
 ### Logs
 
-All four firewall paths log via the kernel (netfilter) with the `BLOCKED: ` prefix, so a single rsyslog filter captures everything. `setup-firewall.sh` writes the filter at `/etc/rsyslog.d/30-blocked-ips.conf` (redirects `BLOCKED: ` to `/var/log/blocked-ips.log` and strips the noise-only `MAC=` field) plus two logrotate configs at `/etc/logrotate.d/{update-blocklist,blocked-ips}` (weekly, rotate 4).
+All four firewall paths log via the kernel (netfilter) with the `BLOCKED: ` prefix, so a single rsyslog filter captures everything. `setup-ipshield.sh` writes the filter at `/etc/rsyslog.d/30-ipshield.conf` (redirects `BLOCKED: ` to `/var/log/ipshield.log` and strips the noise-only `MAC=` field) plus two logrotate configs at `/etc/logrotate.d/{ipshield-update,ipshield}` (weekly, rotate 4).
 
-Rate-limit defaults: `LOG_LIMIT="60/min"` + `LOG_BURST=100`. Packets are always dropped; only a sample is logged under load. Adjust both, or set `LOG_LIMIT=""` to log everything. Timer output goes to `journalctl -u ipshield.service` and `/var/log/update-blocklist.log`.
+Rate-limit defaults: `LOG_LIMIT="60/min"` + `LOG_BURST=100`. Packets are always dropped; only a sample is logged under load. Adjust both, or set `LOG_LIMIT=""` to log everything. Timer output goes to `journalctl -u ipshield.service` and `/var/log/ipshield-update.log`.
 
 ### Docker support
 
-Auto-detected via the `DOCKER-USER` chain. LOG + DROP rules are scoped to `-i $WAN_INTERFACE` so only inbound traffic from the Internet is filtered — container egress is untouched. `ctstate NEW` keeps replies to established outbound connections from being dropped. If WAN auto-detection picks the wrong interface (VPN/multi-homed), set `WAN_INTERFACE` explicitly in `/etc/update-blocklist.conf`.
+Auto-detected via the `DOCKER-USER` chain. LOG + DROP rules are scoped to `-i $WAN_INTERFACE` so only inbound traffic from the Internet is filtered — container egress is untouched. `ctstate NEW` keeps replies to established outbound connections from being dropped. If WAN auto-detection picks the wrong interface (VPN/multi-homed), set `WAN_INTERFACE` explicitly in `/etc/ipshield.conf`.
 
 ### Uninstall
 
 ```bash
 # Dry-run (default): preview every change
-sudo ./uninstall.sh
+sudo ./uninstall-ipshield.sh
 
 # Apply (with interactive confirmation)
-sudo ./uninstall.sh --apply
+sudo ./uninstall-ipshield.sh --apply
 ```
 
-`--apply` removes ipshield rules, ipsets and project-owned components (timer, services, rsyslog filter, logrotate, `nftables.service` drop-in, `before.rules` lines) without further prompts, then asks separately whether to remove `/etc/update-blocklist.conf`, the cache directories and the log files. The firewall and packages are never uninstalled.
+`--apply` removes ipshield rules, ipsets and project-owned components (timer, services, rsyslog filter, logrotate, `nftables.service` drop-in, `before.rules` lines) without further prompts, then asks separately whether to remove `/etc/ipshield.conf`, the cache directories and the log files. The firewall and packages are never uninstalled.
 
 ### Manual firewall rules (advanced)
 
 <details>
-<summary>If you prefer to configure rules manually instead of using <code>setup-firewall.sh</code> / <code>update-blocklist.sh</code></summary>
+<summary>If you prefer to configure rules manually instead of using <code>setup-ipshield.sh</code> / <code>update-ipshield.sh</code></summary>
 
 #### iptables
 
@@ -294,7 +294,7 @@ Validé end-to-end sur chaque ligne : install, refresh blocklist, restauration a
 
 ### Prérequis
 
-Accès root. `setup-firewall.sh` installe automatiquement les paquets manquants ; la table ci-dessous les liste pour référence et pour les setups manuels.
+Accès root. `setup-ipshield.sh` installe automatiquement les paquets manquants ; la table ci-dessous les liste pour référence et pour les setups manuels.
 
 | Outil | Paquet (Debian/Ubuntu) | Paquet (Fedora) |
 |---|---|---|
@@ -311,16 +311,16 @@ Accès root. `setup-firewall.sh` installe automatiquement les paquets manquants 
 git clone https://github.com/GritzTJ/ipshield.git
 cd ipshield
 chmod 700 *.sh
-sudo ./setup-firewall.sh
+sudo ./setup-ipshield.sh
 ```
 
-`setup-firewall.sh` détecte/installe le firewall, copie la config vers `/etc/update-blocklist.conf`, et installe `ipshield.timer` + `ipshield.service` (refresh 8 h + `OnBootSec=2min`), `ipshield-restore.service` + `ipshield-apply.service` (ferment la fenêtre d'exposition au boot à moins de deux secondes), le filtre rsyslog et les deux configs logrotate. Idempotent — relancer pour reconfigurer.
+`setup-ipshield.sh` détecte/installe le firewall, copie la config vers `/etc/ipshield.conf`, et installe `ipshield.timer` + `ipshield.service` (refresh 8 h + `OnBootSec=2min`), `ipshield-restore.service` + `ipshield-apply.service` (ferment la fenêtre d'exposition au boot à moins de deux secondes), le filtre rsyslog et les deux configs logrotate. Idempotent — relancer pour reconfigurer.
 
 ipshield installe uniquement des règles de blocklist ; avec `iptables`/`nftables` directs, le trafic non blacklisté reste accepté sauf durcissement séparé de l'hôte.
 
 ### Configuration
 
-`/etc/update-blocklist.conf` est la source de vérité unique. `setup-firewall.sh` le copie depuis `update-blocklist.conf.example` (chmod 600, owner root) s'il est absent ; un fichier existant est laissé intact.
+`/etc/ipshield.conf` est la source de vérité unique. `setup-ipshield.sh` le copie depuis `ipshield.conf.example` (chmod 600, owner root) s'il est absent ; un fichier existant est laissé intact.
 
 | Variable | Défaut | Description |
 |---|---|---|
@@ -340,12 +340,12 @@ ipshield installe uniquement des règles de blocklist ; avec `iptables`/`nftable
 | `IPSET_SAVE_FILE` | `/var/lib/ipshield/ipset.save` | Chemin vers le fichier de sauvegarde ipset. |
 | `LOOKUP_CACHE_TTL` | `21600` | TTL du cache en secondes pour `lookup-ip.sh` (`0` désactive). |
 
-Toutes les variables sont documentées inline dans `update-blocklist.conf.example`.
+Toutes les variables sont documentées inline dans `ipshield.conf.example`.
 
 ### Utilisation
 
 ```
-update-blocklist.sh [OPTIONS]
+update-ipshield.sh [OPTIONS]
 ```
 
 | Option | Description |
@@ -357,20 +357,20 @@ update-blocklist.sh [OPTIONS]
 
 ```bash
 # Dry run
-./update-blocklist.sh --dry-run --verbose
+./update-ipshield.sh --dry-run --verbose
 
 # Refresh réel (exécuté aussi automatiquement via ipshield.timer)
-sudo ./update-blocklist.sh --verbose
+sudo ./update-ipshield.sh --verbose
 
 # Identifier dans quelles sources figure une IP bloquée
 ./lookup-ip.sh 185.199.108.133
 ```
 
-`lookup-ip.sh` met les téléchargements en cache dans `/var/cache/ipshield/lookup/` pendant `LOOKUP_CACHE_TTL` secondes (défaut 6 h ; `LOOKUP_CACHE_TTL=0` désactive). `update-blocklist.sh` fonctionne seul — il auto-détecte le firewall en place.
+`lookup-ip.sh` met les téléchargements en cache dans `/var/cache/ipshield/lookup/` pendant `LOOKUP_CACHE_TTL` secondes (défaut 6 h ; `LOOKUP_CACHE_TTL=0` désactive). `update-ipshield.sh` fonctionne seul — il auto-détecte le firewall en place.
 
 ### Whitelist
 
-Pour autoriser certaines IP/subnets à contourner le blocage (typiquement les hôtes de management), définir `WHITELIST` dans `/etc/update-blocklist.conf` :
+Pour autoriser certaines IP/subnets à contourner le blocage (typiquement les hôtes de management), définir `WHITELIST` dans `/etc/ipshield.conf` :
 
 ```bash
 WHITELIST=(
@@ -380,7 +380,7 @@ WHITELIST=(
 )
 ```
 
-Au prochain run, `update-blocklist.sh` crée `${SET_NAME}-allow` via swap atomique et insère une règle `ACCEPT` en position 1 sur `INPUT` (et `DOCKER-USER` si présent, scopé à l'interface WAN). Vider `WHITELIST` ensuite retire la règle et l'ipset au prochain run.
+Au prochain run, `update-ipshield.sh` crée `${SET_NAME}-allow` via swap atomique et insère une règle `ACCEPT` en position 1 sur `INPUT` (et `DOCKER-USER` si présent, scopé à l'interface WAN). Vider `WHITELIST` ensuite retire la règle et l'ipset au prochain run.
 
 > **Attention** : la règle ACCEPT contourne **l'ensemble du filtrage firewall**, pas seulement la blocklist. Une IP whitelistée a un accès complet au serveur.
 
@@ -390,10 +390,10 @@ Au prochain run, `update-blocklist.sh` crée `${SET_NAME}-allow` via swap atomiq
 
 | Script | Rôle |
 |---|---|
-| `update-blocklist.sh` | Mise à jour ipset + détection firewall + règles de blocage |
-| `setup-firewall.sh` | Installation interactive du firewall + timer systemd + rsyslog/logrotate (idempotent) |
+| `update-ipshield.sh` | Mise à jour ipset + détection firewall + règles de blocage |
+| `setup-ipshield.sh` | Installation interactive du firewall + timer systemd + rsyslog/logrotate (idempotent) |
 | `lookup-ip.sh` | Recherche d'une IP dans les listes de blocage (diagnostic) |
-| `uninstall.sh` | Désinstallation propre (dry-run par défaut, `--apply` pour exécuter) |
+| `uninstall-ipshield.sh` | Désinstallation propre (dry-run par défaut, `--apply` pour exécuter) |
 
 ### Sources de blocage
 
@@ -411,34 +411,34 @@ Au prochain run, `update-blocklist.sh` crée `${SET_NAME}-allow` via swap atomiq
 | [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Nœuds de sortie Tor |
 | [Internet Scanner IPs](https://github.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs) | Ranges /24 agrégés de scanners Internet connus (Shodan, Censys, ONYPHE, GreyNoise, etc.) |
 
-Personnalisable via la variable `URLS` dans `/etc/update-blocklist.conf`.
+Personnalisable via la variable `URLS` dans `/etc/ipshield.conf`.
 
 ### Logs
 
-Les quatre chemins firewall loguent via le noyau (netfilter) avec le préfixe `BLOCKED: `, donc un seul filtre rsyslog capture tout. `setup-firewall.sh` écrit le filtre dans `/etc/rsyslog.d/30-blocked-ips.conf` (redirige `BLOCKED: ` vers `/var/log/blocked-ips.log` et strippe le champ `MAC=` superflu) et deux configs logrotate dans `/etc/logrotate.d/{update-blocklist,blocked-ips}` (weekly, rotate 4).
+Les quatre chemins firewall loguent via le noyau (netfilter) avec le préfixe `BLOCKED: `, donc un seul filtre rsyslog capture tout. `setup-ipshield.sh` écrit le filtre dans `/etc/rsyslog.d/30-ipshield.conf` (redirige `BLOCKED: ` vers `/var/log/ipshield.log` et strippe le champ `MAC=` superflu) et deux configs logrotate dans `/etc/logrotate.d/{ipshield-update,ipshield}` (weekly, rotate 4).
 
-Défauts du rate-limit : `LOG_LIMIT="60/min"` + `LOG_BURST=100`. Les paquets sont toujours bloqués ; seul un échantillon est logué sous charge. Ajuster les deux, ou mettre `LOG_LIMIT=""` pour tout loguer. La sortie du timer va dans `journalctl -u ipshield.service` et `/var/log/update-blocklist.log`.
+Défauts du rate-limit : `LOG_LIMIT="60/min"` + `LOG_BURST=100`. Les paquets sont toujours bloqués ; seul un échantillon est logué sous charge. Ajuster les deux, ou mettre `LOG_LIMIT=""` pour tout loguer. La sortie du timer va dans `journalctl -u ipshield.service` et `/var/log/ipshield-update.log`.
 
 ### Support Docker
 
-Auto-détecté via la chaîne `DOCKER-USER`. Les règles LOG + DROP sont scopées à `-i $WAN_INTERFACE` pour ne filtrer que le trafic entrant depuis Internet — l'egress des conteneurs n'est pas touché. `ctstate NEW` empêche le drop des réponses à des connexions sortantes déjà établies. Si l'auto-détection WAN se trompe (VPN/multi-homé), définir `WAN_INTERFACE` explicitement dans `/etc/update-blocklist.conf`.
+Auto-détecté via la chaîne `DOCKER-USER`. Les règles LOG + DROP sont scopées à `-i $WAN_INTERFACE` pour ne filtrer que le trafic entrant depuis Internet — l'egress des conteneurs n'est pas touché. `ctstate NEW` empêche le drop des réponses à des connexions sortantes déjà établies. Si l'auto-détection WAN se trompe (VPN/multi-homé), définir `WAN_INTERFACE` explicitement dans `/etc/ipshield.conf`.
 
 ### Désinstallation
 
 ```bash
 # Dry-run (défaut) : prévisualise chaque changement
-sudo ./uninstall.sh
+sudo ./uninstall-ipshield.sh
 
 # Application (avec confirmation interactive)
-sudo ./uninstall.sh --apply
+sudo ./uninstall-ipshield.sh --apply
 ```
 
-`--apply` retire les règles ipshield, les ipsets et les composants project-owned (timer, services, filtre rsyslog, logrotate, drop-in `nftables.service`, lignes dans `before.rules`) sans prompt supplémentaire, puis demande séparément si retirer `/etc/update-blocklist.conf`, les caches et les fichiers de logs. Le firewall et les paquets ne sont jamais désinstallés.
+`--apply` retire les règles ipshield, les ipsets et les composants project-owned (timer, services, filtre rsyslog, logrotate, drop-in `nftables.service`, lignes dans `before.rules`) sans prompt supplémentaire, puis demande séparément si retirer `/etc/ipshield.conf`, les caches et les fichiers de logs. Le firewall et les paquets ne sont jamais désinstallés.
 
 ### Règles firewall manuelles (avancé)
 
 <details>
-<summary>Si vous préférez configurer les règles manuellement au lieu d'utiliser <code>setup-firewall.sh</code> / <code>update-blocklist.sh</code></summary>
+<summary>Si vous préférez configurer les règles manuellement au lieu d'utiliser <code>setup-ipshield.sh</code> / <code>update-ipshield.sh</code></summary>
 
 #### iptables
 

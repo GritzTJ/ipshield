@@ -82,8 +82,7 @@ if [ "$conf_owner" != "0" ]; then
   echo "Error: $CONF_FILE is not owned by root (uid=$conf_owner). Security risk." >&2
   exit 1
 fi
-conf_low="${conf_perms: -3}"
-if (( (8#$conf_low & 8#022) != 0 )); then
+if (( (8#$conf_perms & 022) != 0 )); then
   echo "Error: $CONF_FILE is group/world-writable (perms=$conf_perms). Security risk." >&2
   exit 1
 fi
@@ -376,8 +375,29 @@ _remove_matching_rules() {
       fi
     done < <(iptables -S "$chain" 2>/dev/null || true)
     [ -z "$rule_num" ] && break
-    iptables -D "$chain" "$rule_num"
+    # Guard the delete: a concurrent removal (e.g. Docker recreating DOCKER-USER)
+    # between the scan and the -D would make it fail; under set -e that would
+    # abort the whole run, and an un-deletable match would otherwise loop
+    # forever. Break instead — the next run reconciles.
+    iptables -D "$chain" "$rule_num" 2>/dev/null || break
   done
+}
+
+# --- Rule number (1-based, among the chain's -A rules) of the first rule
+# matching the grep -E pattern $2. Prints nothing and returns 1 if none. ---
+_rule_number() {
+  local chain="$1"
+  local pattern="$2"
+  local line n=0
+  while IFS= read -r line; do
+    [[ "$line" == "-A $chain "* ]] || continue
+    n=$((n + 1))
+    if printf '%s\n' "$line" | grep -qE -- "$pattern"; then
+      printf '%s\n' "$n"
+      return 0
+    fi
+  done < <(iptables -S "$chain" 2>/dev/null || true)
+  return 1
 }
 
 _firewalld_get_all_direct_rules() {
@@ -575,7 +595,13 @@ _ufw_preflight_ipsets() {
     snapshot="${TMP_DIR}/ufw-before.rules.preflight"
     cp /etc/ufw/before.rules "$snapshot"
     for ref_set in "${orphans[@]}"; do
-      sed -i "\\|^-A ufw-before-input .*--match-set $ref_set src |d" /etc/ufw/before.rules
+      # Escape BRE metacharacters before interpolating into the sed pattern.
+      # ipshield's own set names are [a-zA-Z0-9_-]-validated, but orphan names
+      # parsed from before.rules may originate from other tools and could carry
+      # regex-special chars that would mis-target or break the deletion.
+      local ref_set_re
+      ref_set_re="$(printf '%s' "$ref_set" | sed 's/[\\.[*^$]/\\&/g')"
+      sed -i "\\|^-A ufw-before-input .*--match-set $ref_set_re src |d" /etc/ufw/before.rules
     done
     log "ufw: removed orphan rule(s) referencing nonexistent or inactive ipset(s): ${orphans[*]}"
     changed=1
@@ -720,10 +746,21 @@ _apply_iptables_rules() {
     actioned=1
   fi
 
-  # DROP: same pattern (drift on -i possible).
+  # DROP: same pattern (drift on -i possible). Insert it immediately AFTER the
+  # LOG rule rather than at a hardcoded position 2: when a whitelist ACCEPT
+  # occupies position 1, the LOG rule sits at position 2, and a fixed "insert at
+  # 2" would place DROP before LOG (DROP wins, packets never reach LOG -> no
+  # BLOCKED log line). Anchoring to LOG's actual position keeps LOG -> DROP.
   if ! iptables -C "$chain" "${drop_args[@]}" 2>/dev/null; then
     _remove_matching_rules "$chain" "--match-set $SET_NAME src.*-j DROP$"
-    iptables -I "$chain" 2 "${drop_args[@]}"
+    local log_pos drop_pos
+    log_pos="$(_rule_number "$chain" "--match-set $SET_NAME src.*-j LOG --log-prefix \"BLOCKED: \"" || true)"
+    if [ -n "$log_pos" ]; then
+      drop_pos=$((log_pos + 1))
+    else
+      drop_pos=1
+    fi
+    iptables -I "$chain" "$drop_pos" "${drop_args[@]}"
     actioned=1
   fi
 
@@ -879,11 +916,18 @@ apply_firewall_rules() {
       fi
       fw_log_args+=( -j LOG --log-prefix "BLOCKED: " --log-level 4 )
 
-      if ! firewall-cmd --permanent --direct --query-rule ipv4 filter INPUT 0 "${fw_log_args[@]}" >/dev/null 2>/dev/null \
-        || ! firewall-cmd --permanent --direct --query-rule ipv4 filter INPUT 1 "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP >/dev/null 2>/dev/null; then
-        _remove_firewalld_block_rules INPUT
-        firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 "${fw_log_args[@]}" >/dev/null
-        firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP >/dev/null
+      # Direct-rule priorities: whitelist ACCEPT at 0 (added by
+      # _whitelist_or_cleanup_firewalld), LOG at 1, DROP at 2. Strictly
+      # increasing priorities guarantee the ACCEPT -> LOG -> DROP order (lower
+      # priority is evaluated first), matching the other backends. A whitelisted
+      # IP is therefore accepted before the LOG rule can tag it BLOCKED.
+      if ! firewall-cmd --permanent --direct --query-rule ipv4 filter INPUT 1 "${fw_log_args[@]}" >/dev/null 2>/dev/null \
+        || ! firewall-cmd --permanent --direct --query-rule ipv4 filter INPUT 2 "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP >/dev/null 2>/dev/null; then
+        # Best-effort removal: the helper warns and tips on failure but returns 1;
+        # guard it so a single un-removable orphan does not abort the whole run.
+        _remove_firewalld_block_rules INPUT || true
+        firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 "${fw_log_args[@]}" >/dev/null
+        firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 2 "${fw_state_args[@]}" -m set --match-set "$SET_NAME" src -j DROP >/dev/null
         need_reload=1
         log "firewalld rules added (LOG + DROP)."
       fi
@@ -1069,7 +1113,9 @@ declare -a DL_PIDS=()
 
 for i in "${!URLS[@]}"; do
   curl "${CURL_OPTS[@]}" "${URLS[$i]}" -o "${TMP_DIR}/dl.${i}" 2>"${TMP_DIR}/curl.${i}.err" &
-  DL_PIDS+=("$!")
+  # Index by the URLS key (not +=) so the wait loop's ${DL_PIDS[$i]} stays
+  # aligned even if URLS is a sparse array. Mirrors lookup-ip.sh.
+  DL_PIDS[i]="$!"
 done
 
 declare -a DL_OK=()
@@ -1459,6 +1505,7 @@ fi
 # and atomically swapped; firewall application can fail independently.
 _save_persistent_ipsets
 PERSISTENCE_REFRESH_NEEDED=0
+FW_APPLY_FAILED=0
 
 # --- Firewall rules check / apply ---
 DETECTED_FW="$(detect_firewall)"
@@ -1468,7 +1515,13 @@ if [ "$DETECTED_FW" != "none" ]; then
   else
     log "Detected firewall: $DETECTED_FW"
   fi
-  apply_firewall_rules "$DETECTED_FW"
+  # Capture a firewall-apply failure (e.g. firewalld/ufw reload error) instead
+  # of letting set -e abort here: the empty-whitelist teardown and the
+  # persistence refresh below must still run so the saved ipset state stays
+  # consistent. The failure is re-raised as a non-zero exit at the very end.
+  if ! apply_firewall_rules "$DETECTED_FW"; then
+    FW_APPLY_FAILED=1
+  fi
 else
   err "No firewall detected. IPs are in the ipset but no blocking rule is active."
   err "Run setup-ipshield.sh to install a firewall, or install one manually."
@@ -1486,4 +1539,10 @@ fi
 
 if [ "$PERSISTENCE_REFRESH_NEEDED" -eq 1 ]; then
   _save_persistent_ipsets
+fi
+
+if [ "$FW_APPLY_FAILED" -eq 1 ]; then
+  err "Error: firewall rule application failed. The ipsets are updated and persisted,"
+  err "  but blocking rules may be incomplete; the next run will retry."
+  exit 1
 fi

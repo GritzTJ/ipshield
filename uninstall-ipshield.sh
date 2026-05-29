@@ -73,8 +73,7 @@ if [ -f "$CONF_FILE" ]; then
     echo "Error: $CONF_FILE is not owned by root (uid=$conf_owner)." >&2
     exit 1
   fi
-  conf_low="${conf_perms: -3}"
-  if (( (8#$conf_low & 8#022) != 0 )); then
+  if (( (8#$conf_perms & 022) != 0 )); then
     echo "Error: $CONF_FILE is group/world-writable (perms=$conf_perms)." >&2
     exit 1
   fi
@@ -232,7 +231,10 @@ remove_matching_iptables_rules() {
       fi
     done < <(iptables -S "$chain" 2>/dev/null || true)
     [ -z "$rule_num" ] && break
-    iptables -D "$chain" "$rule_num"
+    # Guard the delete: a concurrent removal between the scan and the -D would
+    # make it fail and abort the run under set -e (and an un-deletable match
+    # would loop forever). Break instead.
+    iptables -D "$chain" "$rule_num" 2>/dev/null || break
   done
 }
 

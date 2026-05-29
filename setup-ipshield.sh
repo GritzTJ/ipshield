@@ -499,7 +499,7 @@ _install_config() {
 
 validate_root_config_file() {
   local path="$1"
-  local conf_owner conf_perms conf_low
+  local conf_owner conf_perms
 
   [ -f "$path" ] || return 0
   conf_owner="$(stat -c '%u' "$path")"
@@ -508,8 +508,7 @@ validate_root_config_file() {
     err "$path is not owned by root (uid=$conf_owner). Security risk."
     return 1
   fi
-  conf_low="${conf_perms: -3}"
-  if (( (8#$conf_low & 8#022) != 0 )); then
+  if (( (8#$conf_perms & 022) != 0 )); then
     err "$path is group/world-writable (perms=$conf_perms). Security risk."
     return 1
   fi
@@ -756,10 +755,13 @@ configure_logs() {
     echo ""
     if ask_yes_no "Install rsyslog and configure the filter + logrotate?" yes; then
       log "Installing rsyslog..."
+      # Tolerate install failure (no network, held dpkg lock, package absent on a
+      # stripped image, disk full): err does not exit, so the is-active check
+      # below still runs and falls back to journald instead of aborting setup.
       if [ "$PKG_MANAGER" = "apt" ]; then
-        apt install -y rsyslog
+        apt install -y rsyslog || err "rsyslog install failed; will fall back to journald."
       else
-        dnf install -y rsyslog
+        dnf install -y rsyslog || err "rsyslog install failed; will fall back to journald."
       fi
       systemctl enable rsyslog 2>/dev/null || true
       systemctl start rsyslog 2>/dev/null || true
@@ -1474,17 +1476,21 @@ rollback() {
     err "failure detected -- attempting to re-enable $DETECTED..."
     case "$DETECTED" in
       firewalld)
-        if systemctl start firewalld 2>/dev/null; then log "firewalld re-enabled."
+        # enable --now: the old firewall was 'disable'd during the transition;
+        # 'start' alone would not survive a reboot, leaving the host unprotected
+        # at next boot.
+        if systemctl enable --now firewalld 2>/dev/null; then log "firewalld re-enabled."
         else err "cannot re-enable firewalld."; fi ;;
       ufw)
         if [ -n "${UFW_TRANSITION_BACKUP:-}" ] && [ -f "$UFW_TRANSITION_BACKUP" ]; then
-          cp "$UFW_TRANSITION_BACKUP" /etc/ufw/before.rules
+          cp "$UFW_TRANSITION_BACKUP" /etc/ufw/before.rules 2>/dev/null \
+            || err "cannot restore ufw before.rules from transition backup."
           log "ufw before.rules restored from transition backup."
         fi
         if ufw --force enable 2>/dev/null; then log "ufw re-enabled."
         else err "cannot re-enable ufw."; fi ;;
       nftables)
-        if systemctl start nftables 2>/dev/null; then log "nftables re-enabled."
+        if systemctl enable --now nftables 2>/dev/null; then log "nftables re-enabled."
         else err "cannot re-enable nftables."; fi ;;
       iptables)
         if [ -n "${IPTABLES_BACKUP:-}" ] && [ -f "$IPTABLES_BACKUP" ]; then

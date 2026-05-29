@@ -612,9 +612,9 @@ configure_ipset_restore() {
 
   if [ "$persist" != "1" ]; then
     log "ipset persistence disabled by PERSIST_IPSET=0."
-    # Si un install precedent avait PERSIST_IPSET=1, le service est encore
-    # enabled et chargerait au boot un ipset.save qui ne sera plus rafraichi
-    # par update-ipshield.sh. On le retire ici pour rester coherent.
+    # A previous install with PERSIST_IPSET=1 may have left the service
+    # enabled; at boot it would load an ipset.save that update-ipshield.sh
+    # no longer refreshes. Remove it here to stay consistent.
     local stale_service="/etc/systemd/system/ipshield-restore.service"
     if [ -f "$stale_service" ]; then
       log "Removing stale ipshield-restore.service (PERSIST_IPSET=0)..."
@@ -784,9 +784,9 @@ configure_logs() {
   fi
 
   # Expected contents (aligned with README.md "Logs" section)
-  # Le champ "MAC=<14 octets>" ajoute par iptables LOG est strippe : on bloque par
-  # IP, jamais par MAC, et le filtre bogons garantit que la SRC n'est jamais sur le
-  # meme L2 -- la MAC observee est toujours celle de la gateway, identique partout.
+  # The "MAC=<14 bytes>" field added by iptables LOG is stripped: we block by
+  # IP, never by MAC, and the bogon filter guarantees the SRC is never on the
+  # same L2 -- the observed MAC is always the gateway's, identical everywhere.
   local rsyslog_content
   rsyslog_content='template(name="blockedFormat" type="string"
   string="%timestamp:::date-year%-%timestamp:::date-month%-%timestamp:::date-day% %timestamp:::date-hour%:%timestamp:::date-minute%:%timestamp:::date-second%%$.cleanmsg%\n")

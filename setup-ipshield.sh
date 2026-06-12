@@ -707,7 +707,7 @@ configure_apply_service() {
 
   local unit_content="[Unit]
 Description=Attach ipshield firewall rules to the restored blacklist ipset
-After=ipshield-restore.service nftables.service docker.service
+After=ipshield-restore.service nftables.service ufw.service firewalld.service docker.service
 Wants=ipshield-restore.service
 ConditionPathExists=$conf_path
 

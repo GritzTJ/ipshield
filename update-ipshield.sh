@@ -1159,11 +1159,36 @@ function valid_cidr(p) {
   if (p !~ /^(0|[1-9][0-9]?)$/) return 0;
   return (p+0 >= 0 && p+0 <= 32);
 }
-# Reject reserved ranges (RFC 6890) that should never appear in a public
-# blocklist. Prevents a catastrophic false positive (e.g. FireHOL Level 1
-# includes bogons by design) from blocking the LAN or the Docker bridge.
-function is_bogon(addr) {
-  return (addr ~ /^(0\.|10\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.|127\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.(0\.(0|2)|168)\.|198\.(1[89]|51\.100)\.|203\.0\.113\.|22[4-9]\.|23[0-9]\.|24[0-9]\.|25[0-5]\.)/);
+function ip_to_int(ip,   o) {
+  split(ip, o, ".");
+  return o[1] * 16777216 + o[2] * 65536 + o[3] * 256 + o[4];
+}
+# Reject any entry whose range OVERLAPS a reserved range (RFC 6890) that
+# should never appear in a public blocklist. Overlap -- not just base-address
+# membership -- also catches wider covering blocks whose base address is NOT
+# reserved: 172.0.0.0/8 covers the Docker bridge ranges and 192.160.0.0/11
+# covers the 192.168/16 LAN. Prevents a catastrophic false positive (bogons
+# by design as in FireHOL Level 1, or a corrupted source pushing a wide
+# aggregate) from blocking the LAN or the Docker bridge.
+BEGIN {
+  nbogons = split("0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.168.0.0/16 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4", bogons, " ");
+  for (bi = 1; bi <= nbogons; bi++) {
+    split(bogons[bi], bparts, "/");
+    bsize = 2 ^ (32 - bparts[2]);
+    bogon_start[bi] = ip_to_int(bparts[1]);
+    bogon_end[bi] = bogon_start[bi] + bsize - 1;
+  }
+}
+function overlaps_bogon(ip, prefix,   size, start, end, bi) {
+  size = 2 ^ (32 - prefix);
+  # Mask host bits so a non-canonical CIDR (e.g. 192.169.1.5/15) is tested
+  # on its real network range.
+  start = int(ip_to_int(ip) / size) * size;
+  end = start + size - 1;
+  for (bi = 1; bi <= nbogons; bi++) {
+    if (start <= bogon_end[bi] && bogon_start[bi] <= end) return 1;
+  }
+  return 0;
 }
 {
   # Extraction: normalise spaces, take the first field that starts with a digit
@@ -1182,9 +1207,9 @@ function is_bogon(addr) {
   # (e.g. /0 from a corrupted source would otherwise match every IP).
   if (index(x, "/")) {
     split(x, t, "/");
-    if (valid_ipv4(t[1]) && valid_cidr(t[2]) && (allow_bogons || (!is_bogon(t[1]) && t[2]+0 >= min_prefix))) print t[1] "/" t[2];
+    if (valid_ipv4(t[1]) && valid_cidr(t[2]) && (allow_bogons || (!overlaps_bogon(t[1], t[2]+0) && t[2]+0 >= min_prefix))) print t[1] "/" t[2];
   } else {
-    if (valid_ipv4(x) && (allow_bogons || !is_bogon(x))) print x "/32";
+    if (valid_ipv4(x) && (allow_bogons || !overlaps_bogon(x, 32))) print x "/32";
   }
 }
 '

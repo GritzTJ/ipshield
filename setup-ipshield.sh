@@ -1458,7 +1458,7 @@ if [ "$FIREWALL" = "$DETECTED" ]; then
   echo ""
   log "ipshield.timer is now active. The first update may already be running (Persistent=true catches up missed daily slots)."
   log "Monitor with: journalctl -u ipshield.service -f"
-  log "Scheduled runs: 00:00, 08:00, 16:00 UTC + boot."
+  log "Scheduled runs: 00:00, 08:00, 16:00 server local time + boot."
   exit 0
 fi
 
@@ -1692,4 +1692,4 @@ configure_logs
 echo ""
 log "ipshield.timer is now active. The first update may already be running (Persistent=true catches up missed daily slots)."
 log "Monitor with: journalctl -u ipshield.service -f"
-log "Scheduled runs: 00:00, 08:00, 16:00 UTC + boot."
+log "Scheduled runs: 00:00, 08:00, 16:00 server local time + boot."

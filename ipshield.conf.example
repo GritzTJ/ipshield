@@ -115,8 +115,8 @@ LOOKUP_CACHE_TTL=21600
 # from the merged blacklist.
 #
 # SOURCE_CACHE_DIR: where per-source caches are stored (one file per URL,
-#                   named by the sha256 of the URL). Defaults to a sibling of
-#                   the ipset save directory.
+#                   named by the sha256 of the URL). Default:
+#                   /var/lib/ipshield/sources.
 # SOURCE_MIN_RATIO: if a source returns fewer than (last_good * ratio)
 #                   entries, treat it as degraded and use the cached copy.
 #                   Default 0.5. Set to 0 to disable the degradation check

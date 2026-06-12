@@ -599,8 +599,9 @@ _ufw_preflight_ipsets() {
       # ipshield's own set names are [a-zA-Z0-9_-]-validated, but orphan names
       # parsed from before.rules may originate from other tools and could carry
       # regex-special chars that would mis-target or break the deletion.
+      # '|' is escaped too: it is the sed address delimiter below.
       local ref_set_re
-      ref_set_re="$(printf '%s' "$ref_set" | sed 's/[\\.[*^$]/\\&/g')"
+      ref_set_re="$(printf '%s' "$ref_set" | sed 's/[\\.[*^$|]/\\&/g')"
       sed -i "\\|^-A ufw-before-input .*--match-set $ref_set_re src |d" /etc/ufw/before.rules
     done
     log "ufw: removed orphan rule(s) referencing nonexistent or inactive ipset(s): ${orphans[*]}"
@@ -1478,6 +1479,18 @@ if ipset list -n 2>/dev/null | awk -v s="$WHITELIST_SET_NAME" '$0==s{found=1} EN
 fi
 
 if [ "${#WHITELIST[@]}" -gt 0 ]; then
+  # Same compatibility guard as the blocklist set: an existing set with a
+  # different type/family would make 'ipset swap' fail mid-run with a cryptic
+  # kernel error. Fail early with a clear message instead.
+  if [ "$WL_SET_EXISTS" -eq 1 ]; then
+    wl_set_header="$(ipset list -t "$WHITELIST_SET_NAME" 2>/dev/null)"
+    wl_existing_type="$(echo "$wl_set_header" | awk -F': ' '/^Type: /{print $2; exit}')"
+    wl_existing_family="$(echo "$wl_set_header" | awk -F': ' '/^Header: /{h=$2} END{if (h ~ /family inet6/) print "inet6"; else if (h ~ /family inet/) print "inet"; else print ""}')"
+    if [ "$wl_existing_type" != "$IPSET_TYPE" ] || [ "$wl_existing_family" != "$IPSET_FAMILY" ]; then
+      err "Error: set '$WHITELIST_SET_NAME' exists but type/family incompatible (type=$wl_existing_type family=$wl_existing_family). Expected: type=$IPSET_TYPE family=$IPSET_FAMILY. Aborting."
+      exit 1
+    fi
+  fi
   wl_entries="$(wc -l < "$WL_FILE")"
   wl_maxelem=$(( wl_entries + 100 ))
   [ "$wl_maxelem" -lt 256 ] && wl_maxelem=256

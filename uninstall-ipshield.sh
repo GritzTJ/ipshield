@@ -25,7 +25,8 @@ This script:
   - removes ipshield rules (LOG + DROP blocklist, ACCEPT whitelist) on INPUT
     and DOCKER-USER (if Docker is present);
   - destroys ipsets $SET_NAME and $WHITELIST_SET_NAME;
-  - removes ipshield/orphan rules from /etc/ufw/before.rules line by line (ufw);
+  - removes ipshield/orphan rules from /etc/ufw/before.rules line by line (ufw)
+    and the before.rules backups left by setup/update;
   - removes ipshield.timer, ipshield.service, ipshield-restore.service,
     ipshield-apply.service, ipshield-safe-ports.service, the
     nftables.service drop-in, and the safe-ports configuration files;
@@ -566,6 +567,21 @@ else
 fi
 
 echo ""
+log "${PREFIX}--- ufw before.rules backups ---"
+ufw_backup_files=()
+for f in /etc/ufw/before.rules.ipshield.bak /etc/ufw/before.rules.ipshield-transition.bak; do
+  [ -f "$f" ] && ufw_backup_files+=("$f")
+done
+if [ "${#ufw_backup_files[@]}" -gt 0 ]; then
+  for f in "${ufw_backup_files[@]}"; do
+    echo "  $f"
+  done
+  [ "$APPLY" -eq 1 ] && echo "  -> will be removed automatically."
+else
+  echo "  (none)"
+fi
+
+echo ""
 
 # --- Dry-run mode: exit here ---
 if [ "$APPLY" -eq 0 ]; then
@@ -596,6 +612,12 @@ case "$FW" in
     if [ "$DOCKER_PRESENT" -eq 1 ]; then
       remove_iptables_rules DOCKER-USER
     fi
+    # Also sweep direct INPUT rules left by a previous iptables/nftables-backend
+    # install (firewall switched without uninstalling first). Without this the
+    # stale rules keep referencing the ipset and its destroy below fails.
+    # Harmless on pure firewalld installs: the permanent direct rules were
+    # already removed and reloaded above, so only orphans can match.
+    remove_iptables_rules INPUT
     ;;
   ufw)
     # Remove ipshield rules from before.rules line-by-line (more robust than
@@ -623,7 +645,13 @@ case "$FW" in
         snapshot=/etc/ufw/before.rules.ipshield.uninstall.snapshot
         cp /etc/ufw/before.rules "$snapshot"
         for ref_set in "${sets_to_remove[@]}"; do
-          sed -i "\\|^-A ufw-before-input .*--match-set $ref_set src |d" /etc/ufw/before.rules
+          # Escape BRE metacharacters (and '|', the sed address delimiter):
+          # orphan names parsed from before.rules may come from other tools and
+          # carry regex-special chars that would mis-target or break the
+          # deletion. Same hardening as _ufw_preflight_ipsets in
+          # update-ipshield.sh.
+          ref_set_re="$(printf '%s' "$ref_set" | sed 's/[\\.[*^$|]/\\&/g')"
+          sed -i "\\|^-A ufw-before-input .*--match-set $ref_set_re src |d" /etc/ufw/before.rules
         done
         log "Removed ipshield/orphan rules from /etc/ufw/before.rules: ${sets_to_remove[*]}"
         if ! ufw reload; then
@@ -637,6 +665,13 @@ case "$FW" in
     if [ "$DOCKER_PRESENT" -eq 1 ]; then
       remove_iptables_rules DOCKER-USER
     fi
+    # Also sweep direct INPUT rules left by a previous iptables/nftables-backend
+    # install (firewall switched without uninstalling first). Without this the
+    # stale rules keep referencing the ipset and its destroy below fails.
+    # Harmless on pure ufw installs: ipshield rules live in ufw-before-input
+    # (already cleaned above), and INPUT only carries ufw jump rules that never
+    # match the ipshield patterns.
+    remove_iptables_rules INPUT
     ;;
 esac
 
@@ -742,6 +777,16 @@ if [ -f "$update_timer" ] || [ -f "$update_service" ]; then
   rm -f /var/lib/systemd/timers/stamp-ipshield.timer
   systemctl daemon-reload 2>/dev/null || true
   log "ipshield.timer + ipshield.service removed."
+fi
+
+# --- ufw before.rules backup removal (auto) ---
+if [ "${#ufw_backup_files[@]}" -gt 0 ]; then
+  echo ""
+  log "Removing ufw before.rules backups..."
+  for f in "${ufw_backup_files[@]}"; do
+    rm -f "$f"
+    log "  $f removed."
+  done
 fi
 
 # --- Optional config + persistence file removal ---

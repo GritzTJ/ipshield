@@ -222,7 +222,7 @@ if [ "$LOOKUP_CACHE_TTL" -gt 0 ]; then
   if [ "$(id -u)" -eq 0 ]; then
     LOOKUP_CACHE_DIR="/var/cache/ipshield/lookup"
   else
-    LOOKUP_CACHE_DIR="${XDG_CACHE_HOME:-${HOME:-/tmp/.cache}}/ipshield/lookup"
+    LOOKUP_CACHE_DIR="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/ipshield/lookup"
   fi
   mkdir -p "$LOOKUP_CACHE_DIR" 2>/dev/null || LOOKUP_CACHE_DIR=""
 fi

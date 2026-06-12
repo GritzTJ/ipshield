@@ -94,6 +94,9 @@ ipshield installs blocklist rules only; on direct `iptables`/`nftables`, non-bla
 | `PERSIST_IPSET` | `1` | Save ipshield ipsets after each successful run for boot-time restore. |
 | `IPSET_SAVE_FILE` | `/var/lib/ipshield/ipset.save` | Path to the ipset save file. |
 | `LOOKUP_CACHE_TTL` | `21600` | Cache TTL in seconds for `lookup-ip.sh` (`0` disables). |
+| `SOURCE_CACHE_DIR` | `/var/lib/ipshield/sources` | Per-source last-known-good cache directory (fallback when a source fails or shrinks). |
+| `SOURCE_MIN_RATIO` | `0.5` | Below this fraction of the last good count, a source is considered degraded and its cached copy is used (`0` disables). |
+| `SOURCE_CACHE_MAX_AGE` | `14` | Cache age (days) beyond which new data is trusted even if degraded. |
 
 All variables are documented inline in `ipshield.conf.example`.
 
@@ -226,8 +229,8 @@ iptables -I INPUT 2 -m conntrack --ctstate NEW -m set --match-set blacklist src 
 #### firewalld
 
 ```bash
-firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
-firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
+firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 2 -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
 firewall-cmd --reload
 ```
 
@@ -339,6 +342,9 @@ ipshield installe uniquement des règles de blocklist ; avec `iptables`/`nftable
 | `PERSIST_IPSET` | `1` | Sauvegarde les ipsets ipshield après chaque run réussi pour restauration au boot. |
 | `IPSET_SAVE_FILE` | `/var/lib/ipshield/ipset.save` | Chemin vers le fichier de sauvegarde ipset. |
 | `LOOKUP_CACHE_TTL` | `21600` | TTL du cache en secondes pour `lookup-ip.sh` (`0` désactive). |
+| `SOURCE_CACHE_DIR` | `/var/lib/ipshield/sources` | Répertoire du cache last-known-good par source (fallback si une source échoue ou rétrécit). |
+| `SOURCE_MIN_RATIO` | `0.5` | Sous cette fraction du dernier bon comptage, la source est considérée dégradée et sa copie en cache est utilisée (`0` désactive). |
+| `SOURCE_CACHE_MAX_AGE` | `14` | Âge du cache (jours) au-delà duquel les nouvelles données sont acceptées même dégradées. |
 
 Toutes les variables sont documentées inline dans `ipshield.conf.example`.
 
@@ -471,8 +477,8 @@ iptables -I INPUT 2 -m conntrack --ctstate NEW -m set --match-set blacklist src 
 #### firewalld
 
 ```bash
-firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 0 -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
-firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
+firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 1 -m conntrack --ctstate NEW -m set --match-set blacklist src -m limit --limit 60/min --limit-burst 100 -j LOG --log-prefix "BLOCKED: " --log-level 4
+firewall-cmd --permanent --direct --add-rule ipv4 filter INPUT 2 -m conntrack --ctstate NEW -m set --match-set blacklist src -j DROP
 firewall-cmd --reload
 ```
 

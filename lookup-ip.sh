@@ -164,6 +164,13 @@ valid_ipv4() {
   set -- $ip
   local i
   for i in "$1" "$2" "$3" "$4"; do
+    # Reject octets longer than 3 digits: they are out of the 0-255 range and,
+    # critically, keep the numeric test below within bash's integer range -- a
+    # huge value (e.g. 9999...9) would otherwise make "[ -gt ]" error out and
+    # fall through to acceptance instead of being rejected.
+    if [ "${#i}" -gt 3 ]; then
+      return 1
+    fi
     # No zero padding (except "0" itself)
     if [ "${#i}" -gt 1 ] && [ "${i:0:1}" = "0" ]; then
       return 1

@@ -608,7 +608,7 @@ case "$FW" in
     need_reload=0
     if remove_firewalld_rules INPUT; then need_reload=1; fi
     if remove_firewalld_rules DOCKER-USER; then need_reload=1; fi
-    [ "$need_reload" -eq 1 ] && firewall-cmd --reload >/dev/null
+    [ "$need_reload" -eq 1 ] && { firewall-cmd --reload >/dev/null || err "Warning: firewall-cmd --reload failed; firewalld runtime rules may be stale (re-run 'firewall-cmd --reload')."; }
     if [ "$DOCKER_PRESENT" -eq 1 ]; then
       remove_iptables_rules DOCKER-USER
     fi
@@ -656,7 +656,7 @@ case "$FW" in
         log "Removed ipshield/orphan rules from /etc/ufw/before.rules: ${sets_to_remove[*]}"
         if ! ufw reload; then
           err "ufw reload failed; restoring pre-uninstall snapshot."
-          cp "$snapshot" /etc/ufw/before.rules
+          cp "$snapshot" /etc/ufw/before.rules || err "Failed to restore the before.rules snapshot; inspect /etc/ufw/before.rules manually."
           ufw reload || err "ufw reload still failing after rollback. Inspect /etc/ufw/before.rules manually."
         fi
         rm -f "$snapshot"

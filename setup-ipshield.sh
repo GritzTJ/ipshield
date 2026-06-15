@@ -1411,9 +1411,14 @@ ensure_safe_ports_open() {
       ;;
     firewalld)
       for entry in $ports; do
-        firewall-cmd --permanent --add-port="$entry" >/dev/null
+        firewall-cmd --permanent --add-port="$entry" >/dev/null \
+          || err "Warning: firewall-cmd --permanent --add-port=$entry failed."
       done
-      firewall-cmd --reload >/dev/null
+      # Tolerate a reload failure: aborting here (set -e) after the new firewall
+      # is already active would trigger the rollback trap and layer the old
+      # firewall on top of the running one. Warn instead.
+      firewall-cmd --reload >/dev/null \
+        || err "Warning: firewall-cmd --reload failed; safe ports may not be active until the next reload."
       log "Ports opened (firewalld): $ports"
       ;;
     ufw)
@@ -1546,20 +1551,34 @@ if [ "$DETECTED" != "none" ]; then
       if docker_iptables_chains_present; then
         prepare_docker_firewall_transition "flush iptables tables while disabling old firewall"
       fi
-      # Backup rules before flush (for rollback on failure)
+      # Backup rules before flush (for rollback on failure). If the save fails
+      # or yields an empty backup, abort BEFORE flushing: the original rules are
+      # still in place, and we clear IPTABLES_BACKUP so the rollback trap does
+      # not later restore an empty/partial ruleset over the good one.
       IPTABLES_BACKUP="$(mktemp)"
-      iptables-save > "$IPTABLES_BACKUP"
+      if ! iptables-save > "$IPTABLES_BACKUP" || [ ! -s "$IPTABLES_BACKUP" ]; then
+        err "iptables-save failed or produced an empty backup; aborting before flush (original rules left intact)."
+        rm -f "$IPTABLES_BACKUP"; IPTABLES_BACKUP=""
+        exit 1
+      fi
       for table in filter nat mangle raw; do
         iptables -t "$table" -F 2>/dev/null || true
         iptables -t "$table" -X 2>/dev/null || true
       done
       if command -v ip6tables >/dev/null 2>&1; then
         IPTABLES_BACKUP6="$(mktemp)"
-        ip6tables-save > "$IPTABLES_BACKUP6"
-        for table in filter nat mangle raw; do
-          ip6tables -t "$table" -F 2>/dev/null || true
-          ip6tables -t "$table" -X 2>/dev/null || true
-        done
+        # Same guard for IPv6: if the save fails, skip the IPv6 flush (and clear
+        # the backup so rollback won't restore a partial v6 ruleset) rather than
+        # flushing into an unrecoverable state.
+        if ! ip6tables-save > "$IPTABLES_BACKUP6" || [ ! -s "$IPTABLES_BACKUP6" ]; then
+          err "ip6tables-save failed or produced an empty backup; skipping IPv6 flush."
+          rm -f "$IPTABLES_BACKUP6"; IPTABLES_BACKUP6=""
+        else
+          for table in filter nat mangle raw; do
+            ip6tables -t "$table" -F 2>/dev/null || true
+            ip6tables -t "$table" -X 2>/dev/null || true
+          done
+        fi
       fi
       log "iptables/ip6tables tables flushed (flush + delete chains)."
       ;;
@@ -1629,6 +1648,18 @@ case "$FIREWALL" in
     ;;
   firewalld)
     systemctl enable firewalld
+    # Pre-seed the safe ports into the permanent config BEFORE starting the
+    # daemon, so they are live the instant firewalld comes up. Otherwise a new
+    # connection to a non-standard SSH port could be dropped by the default
+    # deny-by-default zone during the window between 'start' and the reload in
+    # ensure_safe_ports_open. firewall-offline-cmd ships with firewalld and
+    # edits the permanent config while the daemon is stopped.
+    if [ -n "$SAFE_PORTS" ] && command -v firewall-offline-cmd >/dev/null 2>&1; then
+      for entry in $SAFE_PORTS; do
+        firewall-offline-cmd --add-port="$entry" >/dev/null 2>&1 \
+          || err "Warning: could not pre-seed port $entry offline; it will be added after start."
+      done
+    fi
     systemctl start firewalld
     ensure_safe_ports_open "$FIREWALL" "$SAFE_PORTS"
     ;;

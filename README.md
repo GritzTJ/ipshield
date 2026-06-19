@@ -168,6 +168,7 @@ On the next run, `update-ipshield.sh` creates `${SET_NAME}-allow` via atomic swa
 | [IPsum](https://github.com/stamparm/ipsum) | Aggregator of 30+ sources, IPs in ≥3 lists |
 | [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Tor exit nodes |
 | [Internet Scanner IPs](https://github.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs) | Aggregated /24 ranges of known internet scanners (Shodan, Censys, ONYPHE, GreyNoise, etc.) |
+| [Modat](https://www.modat.io/) | IPs of the Modat internet scanner |
 
 Customisable via the `URLS` variable in `/etc/ipshield.conf`.
 
@@ -416,6 +417,7 @@ Au prochain run, `update-ipshield.sh` crée `${SET_NAME}-allow` via swap atomiqu
 | [IPsum](https://github.com/stamparm/ipsum) | Agrégat de 30+ sources, IPs vues dans ≥3 listes |
 | [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Nœuds de sortie Tor |
 | [Internet Scanner IPs](https://github.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs) | Ranges /24 agrégés de scanners Internet connus (Shodan, Censys, ONYPHE, GreyNoise, etc.) |
+| [Modat](https://www.modat.io/) | IP du scanner Internet Modat |
 
 Personnalisable via la variable `URLS` dans `/etc/ipshield.conf`.
 

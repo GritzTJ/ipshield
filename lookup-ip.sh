@@ -211,6 +211,7 @@ source_name() {
     *stamparm/ipsum*)        echo "IPsum" ;;
     *torproject.org*)        echo "Tor exit nodes" ;;
     *palinkas*)              echo "Internet Scanner IPs" ;;
+    *modat*)                 echo "Modat" ;;
     *)                       echo "Source $((idx+1))" ;;
   esac
 }

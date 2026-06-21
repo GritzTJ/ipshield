@@ -734,6 +734,26 @@ WantedBy=multi-user.target"
   log "ipshield-apply.service enabled. Rules will be (re)attached at boot, after Docker."
 }
 
+# Resolve the "user group" rsyslog uses to create log files. rsyslog drops
+# privileges to an unprivileged user (syslog on Debian/Ubuntu) that cannot
+# create files in root-owned /var/log (mode 755, group syslog without write).
+# /var/log/ipshield.log must therefore be pre-created -- and recreated by
+# logrotate -- with this owner, otherwise the omfile action stays suspended
+# ("open error: Permission denied") and no blocked packet is ever written.
+# Mirror an existing rsyslog-managed file (ground truth on this host); fall
+# back to the distro default when none exists yet (fresh rsyslog install).
+# Arg 1: space-separated candidate reference files (override for tests).
+# shellcheck disable=SC2120  # arg 1 is a test-only override; prod calls pass none
+_rsyslog_file_owner() {
+  local refs="${1:-/var/log/syslog /var/log/messages}" ref
+  for ref in $refs; do
+    if [ -e "$ref" ]; then
+      stat -c '%U %G' "$ref" 2>/dev/null && return 0
+    fi
+  done
+  if [ "${PKG_MANAGER:-}" = "apt" ]; then echo "syslog adm"; else echo "root root"; fi
+}
+
 # --- Logs configuration (rsyslog filter + logrotate) ---
 configure_logs() {
   echo ""
@@ -799,10 +819,20 @@ if ($msg contains "BLOCKED: ") then {
   stop
 }'
 
+  # Owner rsyslog uses for the dedicated /var/log/ipshield.log file. logrotate
+  # must recreate the file with this owner ('create' directive below) so that,
+  # after rotation, the privilege-dropped rsyslog can reopen it -- the same
+  # reason it cannot create the file in root-owned /var/log itself.
+  local log_owner log_group owner_pair
+  # shellcheck disable=SC2119  # intentional: use the default reference list
+  owner_pair="$(_rsyslog_file_owner)"
+  log_owner="${owner_pair%% *}"
+  log_group="${owner_pair##* }"
+
   # 'su root root' is required by logrotate >= 3.18 when /var/log is owned
-  # by root:syslog (Debian/Ubuntu default 775). Without it, rotation is
-  # silently skipped on stricter setups. Standard pattern, also used by
-  # /etc/logrotate.d/ubuntu-pro-client.
+  # by root:syslog (Debian/Ubuntu default 755, group syslog without write).
+  # Without it, rotation is silently skipped on stricter setups. Standard
+  # pattern, also used by /etc/logrotate.d/ubuntu-pro-client.
   local logrotate_app_content
   logrotate_app_content='/var/log/update-ipshield.log {
 	su root root
@@ -816,8 +846,9 @@ if ($msg contains "BLOCKED: ") then {
 }'
 
   local logrotate_blocked_content
-  logrotate_blocked_content='/var/log/ipshield.log {
+  logrotate_blocked_content="/var/log/ipshield.log {
 	su root root
+	create 0640 $log_owner $log_group
 	rotate 4
 	weekly
 	missingok
@@ -831,11 +862,21 @@ if ($msg contains "BLOCKED: ") then {
 			/bin/systemctl reload rsyslog 2>/dev/null || true
 		fi
 	endscript
-}'
+}"
 
   local need_rsyslog_restart=0
 
   if [ "$has_rsyslog" -eq 1 ]; then
+    # Pre-create the target file so the privilege-dropped rsyslog can open it
+    # right away (it cannot create files in root-owned /var/log). Without this
+    # the omfile action stays suspended and nothing is logged to the file.
+    if [ ! -e /var/log/ipshield.log ]; then
+      if install -o "$log_owner" -g "$log_group" -m 0640 /dev/null /var/log/ipshield.log; then
+        log "Pre-created /var/log/ipshield.log ($log_owner:$log_group)."
+      else
+        err "Could not pre-create /var/log/ipshield.log; rsyslog may fail to write it."
+      fi
+    fi
     if _install_config /etc/rsyslog.d/30-ipshield.conf "$rsyslog_content" "rsyslog filter"; then
       need_rsyslog_restart=1
     fi

@@ -113,9 +113,14 @@ LOOKUP_CACHE_DIR="/var/cache/ipshield/lookup"
 # Without this lock, a scheduled update-ipshield.sh run could re-create the rules
 # between uninstall removing them and destroying the ipsets, leaving a
 # partially-installed state.
-LOCK_DIR="/run/lock"
+# Root-only runtime dir (0700), shared with update-ipshield.sh. Not /run/lock:
+# that dir is world-writable + sticky, letting a local user squat the lock file
+# and block this script's "exec 9>" under fs.protected_regular=2. Must match the
+# path used by update-ipshield.sh so the two still exclude each other.
+LOCK_DIR="/run/ipshield"
 LOCK_FILE="${LOCK_DIR}/${SET_NAME}.lock"
 mkdir -p "$LOCK_DIR"
+chmod 700 "$LOCK_DIR"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
   echo "Error: update-ipshield.sh is already running; retry in a few seconds." >&2

@@ -236,7 +236,12 @@ fi
 # --- Derived variables ---
 IPSET_TYPE="hash:net"
 IPSET_FAMILY="inet"
-LOCK_DIR="/run/lock"
+# The lock lives in a root-only runtime dir (0700), NOT /run/lock: that dir is
+# world-writable + sticky (mode 1777), so any local user could pre-create
+# /run/lock/$SET_NAME.lock owned by themselves and — with fs.protected_regular=2
+# (the modern default) — make root's "exec 9>" below fail with EACCES, silently
+# aborting every scheduled refresh (and uninstall, which shares this lock).
+LOCK_DIR="/run/ipshield"
 LOCK_FILE="${LOCK_DIR}/${SET_NAME}.lock"
 TMP_DIR="$(mktemp -d -p /run "${SET_NAME}.XXXXXX")"
 UNIQ_FILE="${TMP_DIR}/uniq"
@@ -246,6 +251,14 @@ WL_TEMP_SET="${WHITELIST_SET_NAME}-tmp-$$"
 WL_FILE="${TMP_DIR}/whitelist"
 WL_TMP_FILE="${TMP_DIR}/wl_restore"
 CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize 10485760 --retry 3 --retry-delay 2 --retry-all-errors )
+# Hard cap on the bytes actually written per source. curl's --max-filesize only
+# bounds the on-the-wire (compressed) transfer; with --compressed a source can
+# decompress a tiny gzip into an arbitrarily large file and exhaust /run
+# (tmpfs). head -c enforces the limit on the decompressed output written to
+# disk. 10 MiB is far above any legitimate source (all < a few MB); a source
+# that exceeds it is truncated, treated as a failed download, and falls back to
+# its last-known-good cache.
+MAX_DL_BYTES=10485760
 
 if [ "${#TEMP_SET}" -gt 31 ]; then
   echo "Error: temporary set name too long (${#TEMP_SET} > 31)" >&2
@@ -1017,6 +1030,7 @@ $ufw_drop_line
 # --- Dependency check ---
 need_cmd curl
 need_cmd awk
+need_cmd head
 need_cmd sort
 need_cmd ipset
 need_cmd flock
@@ -1028,6 +1042,7 @@ need_cmd stat
 
 # --- Lock ---
 mkdir -p "$LOCK_DIR"
+chmod 700 "$LOCK_DIR"
 # Identify the trigger source so log entries are self-explanatory:
 #   - APPLY_ONLY=1 is only set by ipshield-apply.service (boot fast path).
 #   - INVOCATION_ID is set by systemd for any unit-driven run; combined with
@@ -1113,7 +1128,16 @@ ok=0
 declare -a DL_PIDS=()
 
 for i in "${!URLS[@]}"; do
-  curl "${CURL_OPTS[@]}" "${URLS[$i]}" -o "${TMP_DIR}/dl.${i}" 2>"${TMP_DIR}/curl.${i}.err" &
+  # Pipe through head -c to bound the bytes written to /run (see MAX_DL_BYTES).
+  # The subshell + pipefail turns curl's SIGPIPE (when head closes the pipe on
+  # an oversized/decompression-bomb source) or any transfer error into a
+  # non-zero status; wait below then treats it as a failed download. An explicit
+  # subshell is required: for a backgrounded pipeline, `wait $!` would otherwise
+  # only see head's exit status, never curl's.
+  ( set -o pipefail
+    curl "${CURL_OPTS[@]}" "${URLS[$i]}" 2>"${TMP_DIR}/curl.${i}.err" \
+      | head -c "$MAX_DL_BYTES" > "${TMP_DIR}/dl.${i}"
+  ) &
   # Index by the URLS key (not +=) so the wait loop's ${DL_PIDS[$i]} stays
   # aligned even if URLS is a sparse array. Mirrors lookup-ip.sh.
   DL_PIDS[i]="$!"

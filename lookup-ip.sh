@@ -191,6 +191,7 @@ fi
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { err "Error: missing command: $1"; exit 1; }; }
 need_cmd curl
 need_cmd awk
+need_cmd head
 if [ "$LOOKUP_CACHE_TTL" -gt 0 ]; then
   need_cmd sha256sum
 fi
@@ -356,6 +357,11 @@ BEGIN {
 
 # --- curl options ---
 CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize 10485760 --retry 3 --retry-delay 2 --retry-all-errors )
+# Hard cap on the bytes actually written per source. --max-filesize only bounds
+# the on-the-wire (compressed) transfer; with --compressed a source can
+# decompress a tiny gzip into an arbitrarily large file. head -c enforces the
+# limit on the decompressed output. Same rationale as update-ipshield.sh.
+MAX_DL_BYTES=10485760
 
 cache_path_for_url() {
   local url="$1"
@@ -423,7 +429,14 @@ for i in "${!URLS[@]}"; do
 
   DL_FROM_CACHE[i]=0
   (
-    curl "${CURL_OPTS[@]}" "${URLS[$i]}" -o "${TMP_DIR}/dl.${i}" 2>/dev/null
+    set -o pipefail
+    # head -c bounds the bytes written to the temp dir (see MAX_DL_BYTES);
+    # --max-filesize only caps the compressed transfer. The script-wide set -e
+    # aborts this subshell if curl or the pipe fails (including the SIGPIPE from
+    # head truncating an oversized source), so a failed/truncated download is
+    # neither cached below nor counted as a successful source by the wait loop.
+    curl "${CURL_OPTS[@]}" "${URLS[$i]}" 2>/dev/null \
+      | head -c "$MAX_DL_BYTES" > "${TMP_DIR}/dl.${i}"
     if [ -n "$cache_file" ]; then
       tmp_cache="${cache_file}.$$.tmp"
       if cp "${TMP_DIR}/dl.${i}" "$tmp_cache" 2>/dev/null; then

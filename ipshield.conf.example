@@ -22,6 +22,9 @@ URLS=(
   "https://check.torproject.org/torbulkexitlist"
   "https://raw.githubusercontent.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs/main/Scanner_IP_ranges.txt"
   "https://scanner.modat.io/ipv4.txt"
+  "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"
+  "https://www.binarydefense.com/banlist.txt"
+  "https://feodotracker.abuse.ch/downloads/ipblocklist_aggressive.txt"
 )
 
 # --- ipset blacklist name ---

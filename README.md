@@ -169,6 +169,9 @@ On the next run, `update-ipshield.sh` creates `${SET_NAME}-allow` via atomic swa
 | [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Tor exit nodes |
 | [Internet Scanner IPs](https://github.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs) | Aggregated /24 ranges of known internet scanners (Shodan, Censys, ONYPHE, GreyNoise, etc.) |
 | [Modat](https://www.modat.io/) | IPs of the Modat internet scanner |
+| [ET Compromised](https://rules.emergingthreats.net/) | Known compromised hosts |
+| [Binary Defense](https://www.binarydefense.com/) | Threat-intel ban list |
+| [Feodo Tracker](https://feodotracker.abuse.ch/) | Botnet C2 servers (Dridex, Emotet, QakBot, etc.) |
 
 Customisable via the `URLS` variable in `/etc/ipshield.conf`.
 
@@ -418,6 +421,9 @@ Au prochain run, `update-ipshield.sh` crée `${SET_NAME}-allow` via swap atomiqu
 | [Tor exit nodes](https://check.torproject.org/torbulkexitlist) | Nœuds de sortie Tor |
 | [Internet Scanner IPs](https://github.com/palinkas-jo-reggelt/List_of_Internet_Scanner_IPs) | Ranges /24 agrégés de scanners Internet connus (Shodan, Censys, ONYPHE, GreyNoise, etc.) |
 | [Modat](https://www.modat.io/) | IP du scanner Internet Modat |
+| [ET Compromised](https://rules.emergingthreats.net/) | Hôtes compromis connus |
+| [Binary Defense](https://www.binarydefense.com/) | Liste de bannissement threat-intel |
+| [Feodo Tracker](https://feodotracker.abuse.ch/) | Serveurs C2 de botnets (Dridex, Emotet, QakBot, etc.) |
 
 Personnalisable via la variable `URLS` dans `/etc/ipshield.conf`.
 

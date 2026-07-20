@@ -203,6 +203,7 @@ source_name() {
   case "$url" in
     *duggytuxy*)             echo "Data-Shield" ;;
     *spamhaus.org*drop*)     echo "Spamhaus DROP" ;;
+    *emergingthreats.net*compromised*) echo "ET Compromised" ;;
     *emergingthreats.net*)   echo "Emerging Threats" ;;
     *cinsscore.com*)         echo "CINS" ;;
     *abuseipdb*)             echo "AbuseIPDB" ;;
@@ -213,6 +214,8 @@ source_name() {
     *torproject.org*)        echo "Tor exit nodes" ;;
     *palinkas*)              echo "Internet Scanner IPs" ;;
     *modat*)                 echo "Modat" ;;
+    *binarydefense*)         echo "Binary Defense" ;;
+    *feodotracker*)          echo "Feodo Tracker" ;;
     *)                       echo "Source $((idx+1))" ;;
   esac
 }

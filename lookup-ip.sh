@@ -360,8 +360,10 @@ CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize
 # Hard cap on the bytes actually written per source. --max-filesize only bounds
 # the on-the-wire (compressed) transfer; with --compressed a source can
 # decompress a tiny gzip into an arbitrarily large file. head -c enforces the
-# limit on the decompressed output. Same rationale as update-ipshield.sh.
-MAX_DL_BYTES=10485760
+# limit on the decompressed output. 64 MiB accommodates large legitimate
+# sources (e.g. AbuseIPDB's s100-365d list is ~40 MiB decompressed). Same
+# rationale as update-ipshield.sh.
+MAX_DL_BYTES=67108864
 
 cache_path_for_url() {
   local url="$1"

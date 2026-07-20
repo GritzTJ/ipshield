@@ -255,10 +255,12 @@ CURL_OPTS=( -fsSL --compressed --connect-timeout 10 --max-time 30 --max-filesize
 # bounds the on-the-wire (compressed) transfer; with --compressed a source can
 # decompress a tiny gzip into an arbitrarily large file and exhaust /run
 # (tmpfs). head -c enforces the limit on the decompressed output written to
-# disk. 10 MiB is far above any legitimate source (all < a few MB); a source
-# that exceeds it is truncated, treated as a failed download, and falls back to
-# its last-known-good cache.
-MAX_DL_BYTES=10485760
+# disk. 64 MiB accommodates large legitimate sources (e.g. AbuseIPDB's
+# s100-365d list is ~40 MiB / ~800K entries decompressed) while still bounding
+# a bomb: --max-filesize already caps the compressed transfer at 10 MiB, and a
+# source exceeding this decompressed cap is truncated, treated as a failed
+# download, and falls back to its last-known-good cache.
+MAX_DL_BYTES=67108864
 
 if [ "${#TEMP_SET}" -gt 31 ]; then
   echo "Error: temporary set name too long (${#TEMP_SET} > 31)" >&2

@@ -1,5 +1,5 @@
 #!/bin/bash
-# ipshield v1.2.5
+# ipshield v1.2.6
 set -euo pipefail
 umask 077
 export LC_ALL=C

@@ -406,8 +406,13 @@ detect_update_script_path() {
 #   - then at 00:00, 08:00, 16:00 every day with a 5-minute jitter,
 #   - Persistent=true catches up a missed run if the machine was off at the
 #     scheduled time.
-# Stdout/stderr are captured by journald; check via:
-#   journalctl -u ipshield.service
+# Stdout/stderr are appended to /var/log/update-ipshield.log; the script also
+# mirrors every line to syslog. Follow a run with:
+#   journalctl -t update-ipshield
+# Not `journalctl -u ipshield.service`: journald resolves the unit from the
+# emitting process's cgroup, and the short-lived `logger` calls the script
+# spawns usually exit before that lookup happens, so the entries land without
+# _SYSTEMD_UNIT and unit-filtered output silently drops arbitrary lines.
 configure_timer() {
   local service_path="/etc/systemd/system/ipshield.service"
   local timer_path="/etc/systemd/system/ipshield.timer"
@@ -1503,7 +1508,7 @@ if [ "$FIREWALL" = "$DETECTED" ]; then
   configure_logs
   echo ""
   log "ipshield.timer is now active. The first update may already be running (Persistent=true catches up missed daily slots)."
-  log "Monitor with: journalctl -u ipshield.service -f"
+  log "Monitor with: journalctl -t update-ipshield -f (or /var/log/update-ipshield.log)"
   log "Scheduled runs: 00:00, 08:00, 16:00 server local time + boot."
   exit 0
 fi
@@ -1763,5 +1768,5 @@ configure_logs
 
 echo ""
 log "ipshield.timer is now active. The first update may already be running (Persistent=true catches up missed daily slots)."
-log "Monitor with: journalctl -u ipshield.service -f"
+log "Monitor with: journalctl -t update-ipshield -f (or /var/log/update-ipshield.log)"
 log "Scheduled runs: 00:00, 08:00, 16:00 server local time + boot."

@@ -25,6 +25,7 @@ URLS=(
   "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"
   "https://www.binarydefense.com/banlist.txt"
   "https://feodotracker.abuse.ch/downloads/ipblocklist_aggressive.txt"
+  "https://iplists.firehol.org/files/blocklist_net_ua.ipset"
 )
 
 # --- ipset blacklist name ---

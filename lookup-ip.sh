@@ -207,6 +207,7 @@ source_name() {
     *emergingthreats.net*)   echo "Emerging Threats" ;;
     *cinsscore.com*)         echo "CINS" ;;
     *abuseipdb*)             echo "AbuseIPDB" ;;
+    *blocklist_net_ua*)      echo "BlockList.net.ua" ;;
     *firehol*)               echo "FireHOL Level 1" ;;
     *greensnow*)             echo "GreenSnow" ;;
     *blocklist.de*)          echo "Blocklist.de" ;;

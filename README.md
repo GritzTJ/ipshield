@@ -172,6 +172,7 @@ On the next run, `update-ipshield.sh` creates `${SET_NAME}-allow` via atomic swa
 | [ET Compromised](https://rules.emergingthreats.net/) | Known compromised hosts |
 | [Binary Defense](https://www.binarydefense.com/) | Threat-intel ban list |
 | [Feodo Tracker](https://feodotracker.abuse.ch/) | Botnet C2 servers (Dridex, Emotet, QakBot, etc.) |
+| [BlockList.net.ua](https://blocklist.net.ua/) | Ukrainian hoster's abuse telemetry: DDoS, HTTP flood, brute force (via FireHOL mirror) |
 
 Customisable via the `URLS` variable in `/etc/ipshield.conf`.
 
@@ -424,6 +425,7 @@ Au prochain run, `update-ipshield.sh` crée `${SET_NAME}-allow` via swap atomiqu
 | [ET Compromised](https://rules.emergingthreats.net/) | Hôtes compromis connus |
 | [Binary Defense](https://www.binarydefense.com/) | Liste de bannissement threat-intel |
 | [Feodo Tracker](https://feodotracker.abuse.ch/) | Serveurs C2 de botnets (Dridex, Emotet, QakBot, etc.) |
+| [BlockList.net.ua](https://blocklist.net.ua/) | Télémétrie d'abus d'un hébergeur ukrainien : DDoS, HTTP flood, brute force (via miroir FireHOL) |
 
 Personnalisable via la variable `URLS` dans `/etc/ipshield.conf`.
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# ipshield v1.2.6
+# ipshield v1.2.7
 set -euo pipefail
 umask 077
 

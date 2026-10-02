@@ -208,6 +208,7 @@ source_name() {
     *cinsscore.com*)         echo "CINS" ;;
     *abuseipdb*)             echo "AbuseIPDB" ;;
     *blocklist_net_ua*)      echo "BlockList.net.ua" ;;
+    *sslproxies*)            echo "SSL Proxies" ;;
     *firehol*)               echo "FireHOL Level 1" ;;
     *greensnow*)             echo "GreenSnow" ;;
     *blocklist.de*)          echo "Blocklist.de" ;;

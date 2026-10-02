@@ -26,6 +26,7 @@ URLS=(
   "https://www.binarydefense.com/banlist.txt"
   "https://feodotracker.abuse.ch/downloads/ipblocklist_aggressive.txt"
   "https://iplists.firehol.org/files/blocklist_net_ua.ipset"
+  "https://iplists.firehol.org/files/sslproxies_7d.ipset"
 )
 
 # --- ipset blacklist name ---

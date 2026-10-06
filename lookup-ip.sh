@@ -209,6 +209,7 @@ source_name() {
     *abuseipdb*)             echo "AbuseIPDB" ;;
     *blocklist_net_ua*)      echo "BlockList.net.ua" ;;
     *sslproxies*)            echo "SSL Proxies" ;;
+    *socks_proxy*)           echo "SOCKS Proxies" ;;
     *firehol*)               echo "FireHOL Level 1" ;;
     *greensnow*)             echo "GreenSnow" ;;
     *blocklist.de*)          echo "Blocklist.de" ;;

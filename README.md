@@ -174,6 +174,7 @@ On the next run, `update-ipshield.sh` creates `${SET_NAME}-allow` via atomic swa
 | [Feodo Tracker](https://feodotracker.abuse.ch/) | Botnet C2 servers (Dridex, Emotet, QakBot, etc.) |
 | [BlockList.net.ua](https://blocklist.net.ua/) | Ukrainian hoster's abuse telemetry: DDoS, HTTP flood, brute force (via FireHOL mirror) |
 | [SSL Proxies](https://www.sslproxies.org/) | Open HTTPS proxies seen in the last 7 days (via FireHOL mirror) |
+| [SOCKS Proxies](https://iplists.firehol.org/?ipset=socks_proxy_7d) | Open SOCKS proxies seen in the last 7 days (FireHOL list) |
 
 Customisable via the `URLS` variable in `/etc/ipshield.conf`.
 
@@ -428,6 +429,7 @@ Au prochain run, `update-ipshield.sh` crée `${SET_NAME}-allow` via swap atomiqu
 | [Feodo Tracker](https://feodotracker.abuse.ch/) | Serveurs C2 de botnets (Dridex, Emotet, QakBot, etc.) |
 | [BlockList.net.ua](https://blocklist.net.ua/) | Télémétrie d'abus d'un hébergeur ukrainien : DDoS, HTTP flood, brute force (via miroir FireHOL) |
 | [SSL Proxies](https://www.sslproxies.org/) | Proxys HTTPS ouverts vus sur les 7 derniers jours (via miroir FireHOL) |
+| [SOCKS Proxies](https://iplists.firehol.org/?ipset=socks_proxy_7d) | Proxys SOCKS ouverts vus sur les 7 derniers jours (liste FireHOL) |
 
 Personnalisable via la variable `URLS` dans `/etc/ipshield.conf`.
 
